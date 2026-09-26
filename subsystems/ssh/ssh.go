@@ -1,6 +1,6 @@
 // Package ssh owns principal-scoped SSH hosts, keys, rendered configuration, live probes, and authentication. The
-// database stores host and key metadata while private keys and generated configs remain protected files. Host/key
-// mutations coordinate database, config, and file effects as compensated flows; OpenSSH execution and
+// database stores SSH host and key metadata while private keys and generated configs remain protected files. SSH
+// host and key mutations coordinate database, config, and file effects as compensated flows; OpenSSH execution and
 // control-master mechanics remain in internal/ssh. Health only opens a TCP connection to the first hop, and only to
 // public addresses, so it cannot probe cs-plane's own network.
 package ssh
@@ -59,7 +59,7 @@ func hostWithCredential(alias, command, key string) (HostEntry, error) {
 }
 
 func (s Service) addHost(principal security.Principal, request AddHostRequest) (HostEntry, error) {
-	host, err := hostWithCredential(strings.TrimSpace(request.Name), request.Command, request.Key)
+	host, err := hostWithCredential(strings.TrimSpace(request.Alias), request.Command, request.Key)
 	if err != nil {
 		return HostEntry{}, err
 	}
@@ -74,7 +74,7 @@ func (s Service) updateHost(principal security.Principal, alias string, request 
 	return s.Store.updateHost(security.PrincipalDirName(principal), s.Configs.ConfigPath(principal), host)
 }
 
-func (s Service) removeHost(principal security.Principal, alias string) error {
+func (s Service) deleteHost(principal security.Principal, alias string) error {
 	if !internalssh.ValidAlias(alias) {
 		return internalssh.ErrInvalidAlias
 	}
@@ -99,10 +99,10 @@ func (s Service) hostHealth(ctx context.Context, principal security.Principal, a
 	}
 	conn, err := dialHealth(ctx, "tcp", address)
 	if err != nil {
-		return HostHealth{Host: alias, Message: "Nothing accepted a connection at " + address + "."}, nil
+		return HostHealth{Alias: alias, Message: "Nothing accepted a connection at " + address + "."}, nil
 	}
 	_ = conn.Close()
-	return HostHealth{Host: alias, OK: true, Message: "Listening at " + address + "."}, nil
+	return HostHealth{Alias: alias, OK: true, Message: "Listening at " + address + "."}, nil
 }
 
 func (s Service) sshRoutes() router.Routes {
@@ -112,7 +112,7 @@ func (s Service) sshRoutes() router.Routes {
 				hosts, err := s.Store.loadHosts(security.PrincipalDirName(principal))
 				return HostList{Hosts: hosts}, err
 			}),
-			http.MethodPost: security.CreatedAsPrincipal(func(host HostEntry) string { return "/api/v1/hosts/" + url.PathEscape(host.Name) }, func(principal security.Principal, request *http.Request) (HostEntry, error) {
+			http.MethodPost: security.CreatedAsPrincipal(func(host HostEntry) string { return "/api/v1/hosts/" + url.PathEscape(host.Alias) }, func(principal security.Principal, request *http.Request) (HostEntry, error) {
 				var body AddHostRequest
 				if err := security.DecodeJSON(request, &body); err != nil {
 					return HostEntry{}, err
@@ -129,7 +129,7 @@ func (s Service) sshRoutes() router.Routes {
 				return s.updateHost(principal, request.PathValue("alias"), body)
 			}),
 			http.MethodDelete: security.NoContentAsPrincipal(func(principal security.Principal, request *http.Request) error {
-				return s.removeHost(principal, request.PathValue("alias"))
+				return s.deleteHost(principal, request.PathValue("alias"))
 			}),
 		},
 		"/api/v1/hosts/{alias}/health": {

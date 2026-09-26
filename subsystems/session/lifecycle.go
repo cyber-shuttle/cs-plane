@@ -1,13 +1,12 @@
 // The session state machine. Define records a stopped session under an ID derived from the idempotency key, so a
-// replay answers it; AdoptRuns attaches runs another client finished to a session that never ran, once. Start
-// launches a run through Slurm, serialized across processes before tunnel side effects, and persists intent before
-// provisioning. A conclusive submission failure compensates through abandonSubmitIntent; an ambiguous one stays
-// durable. A stop proceeds locally without a usable link: releaseTunnel skips Dev Tunnels when the token is empty.
+// replay answers it. Start launches a run through Slurm, serialized across processes before Dev Tunnel side effects,
+// and persists intent before provisioning. A conclusive submission failure compensates through abandonSubmitIntent; an
+// ambiguous one stays durable. A stop proceeds locally without a usable link, and reads the Dev Tunnels account only
+// for a session that has a Dev Tunnel.
 // Attach admits a run the client launches itself, which cs-plane never schedules or cancels.
 package session
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,16 +37,16 @@ func assignSessionID(request CreateRequest, principal security.Principal) (Creat
 }
 
 func sameCreateRequest(session *Session, request CreateRequest) bool {
-	return session.SSHHost == request.SSHHost && session.Account == request.Account && session.Partition == request.Partition && session.RootFolder == request.RootFolder && session.Resources == request.Resources && slices.Equal(session.TunnelModes, request.TunnelModes)
+	return session.Alias == request.Alias && session.Account == request.Account && session.Partition == request.Partition && session.RootFolder == request.RootFolder && session.Resources == request.Resources && slices.Equal(session.TunnelModes, request.TunnelModes)
 }
 
-func (s Service) tunnelCredential(ctx context.Context, principal security.Principal, modes []string) (devtunnel.Credential, error) {
-	if !slices.Contains(modes, modeDevtunnel) {
+func (s Service) devtunnelCredential(ctx context.Context, principal security.Principal, transports []string) (devtunnel.Credential, error) {
+	if !slices.Contains(transports, transportDevtunnel) {
 		return devtunnel.Credential{}, nil
 	}
-	credential, err := s.TunnelCredentials.Credential(ctx, principal)
+	credential, err := s.DevtunnelCredentials.Credential(ctx, principal)
 	if err == nil && credential.Token == "" {
-		err = errTunnelLinkRequired
+		err = errDevtunnelsAccountRequired
 	}
 	return credential, err
 }
@@ -76,7 +75,7 @@ func (s Service) serialized(id string, fn func() error) error {
 }
 
 func (s Service) launchSerialized(ctx context.Context, request CreateRequest, principal security.Principal) (*Session, error) {
-	credential, err := s.tunnelCredential(ctx, principal, request.TunnelModes)
+	credential, err := s.devtunnelCredential(ctx, principal, request.TunnelModes)
 	if err != nil {
 		return nil, err
 	}
@@ -95,19 +94,19 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 	defer done()
 
 	intent := prepared.session
-	intent.State, intent.Launcher = "SUBMITTING", launcherPlane
+	intent.State, intent.Platform = "SUBMITTING", platformJupyterLab
 	intent, hostToken, capability, err := s.claimRun(operationCtx, principal, credential, intent)
 	if err != nil {
 		return nil, err
 	}
 	prepared.script = buildScript(intent, prepared.linkspan)
-	if err := s.provisionSession(request.SSHHost, intent, prepared.home, prepared.linkspan); err != nil {
+	if err := s.provisionSession(request.Alias, intent, prepared.home, prepared.linkspan); err != nil {
 		s.sessionStatus(intent.ID, "Session environment preparation failed")
 		return nil, errors.Join(err, s.abandonSubmitIntent(credential, intent))
 	}
 
-	s.sessionStatus(intent.ID, "Submitting session to Slurm")
-	jobID, err := s.submitSessionScript(operationCtx, request.SSHHost, intent, prepared.script, capability, hostToken)
+	s.sessionStatus(intent.ID, "Submitting Slurm job")
+	jobID, err := s.submitSessionScript(operationCtx, request.Alias, intent, prepared.script, capability, hostToken)
 	if err != nil {
 		if slurm.AmbiguousSubmission(err) {
 			s.sessionStatus(intent.ID, "Session submission outcome is unresolved")
@@ -116,11 +115,11 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 		s.sessionStatus(intent.ID, "Session submission failed")
 		return nil, errors.Join(err, s.abandonSubmitIntent(credential, intent))
 	}
-	s.sessionStatus(intent.ID, "Session submitted to Slurm")
+	s.sessionStatus(intent.ID, "Slurm job submitted")
 	created, superseded, err := s.recordSubmittedJob(intent.ID, jobID)
 	if err != nil {
 		s.sessionStatus(intent.ID, "Session submission could not be saved")
-		if cancelErr := s.scancelWithOwnTimeout(request.SSHHost, jobID); cancelErr != nil {
+		if cancelErr := s.scancelWithOwnTimeout(request.Alias, jobID); cancelErr != nil {
 			return nil, fmt.Errorf("%w; compensation scancel failed: %w", err, cancelErr)
 		}
 		return nil, fmt.Errorf("%w; job was cancelled", err)
@@ -131,7 +130,7 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 	if !superseded {
 		return created, nil
 	}
-	replaced, err := s.cancelSupersededJob(request.SSHHost, intent.ID, jobID)
+	replaced, err := s.cancelSupersededJob(request.Alias, intent.ID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +166,7 @@ func (s Service) claimRun(ctx context.Context, principal security.Principal, cre
 	hostToken, capability, err := s.issueSession(ctx, &intent, principal, credential, previous.Seq+1)
 	if err == nil {
 		if err = s.persistSubmitIntent(previous, intent); err != nil {
-			err = errors.Join(err, s.releaseTunnel(credential, intent.ID, intent.Seq, intent.Tunnel))
+			err = errors.Join(err, s.releaseDevtunnel(credential, intent.ID, intent.Seq, intent.Devtunnel))
 		}
 	}
 	return intent, hostToken, capability, err
@@ -192,7 +191,7 @@ func (s Service) persistSubmitIntent(previous *Session, intent Session) error {
 
 func (s Service) validateForCreate(ctx context.Context, request CreateRequest, script string) error {
 	s.sessionStatus(request.ID, "Validating session with Slurm")
-	checked, err := slurm.Check(ctx, s.runner, request.SSHHost, script)
+	checked, err := slurm.Check(ctx, s.runner, request.Alias, script)
 	if err == nil && !checked.Passed {
 		err = security.New("slurm_validation_failed", validationMessage(checked), http.StatusBadRequest)
 	}
@@ -227,16 +226,16 @@ func (s Service) recordSubmittedJob(sessionID, jobID string) (*Session, bool, er
 	return created, superseded, err
 }
 
-func (s Service) scancelWithOwnTimeout(host, jobID string) error {
+func (s Service) scancelWithOwnTimeout(alias, jobID string) error {
 	ctx, cancel := s.ownTimeout()
 	defer cancel()
-	_, err := s.runner.Run(ctx, host, nil, "scancel", jobID)
+	_, err := s.runner.Run(ctx, alias, nil, "scancel", jobID)
 	return err
 }
 
-func (s Service) cancelSupersededJob(host, sessionID, jobID string) (*Session, error) {
+func (s Service) cancelSupersededJob(alias, sessionID, jobID string) (*Session, error) {
 	diagnostic := ""
-	if cancelErr := s.scancelWithOwnTimeout(host, jobID); cancelErr != nil {
+	if cancelErr := s.scancelWithOwnTimeout(alias, jobID); cancelErr != nil {
 		diagnostic = boundedSessionError(cancelErr)
 	}
 	var result *Session
@@ -262,12 +261,12 @@ func (s Service) retireFinished(ctx context.Context, principal security.Principa
 	if err != nil {
 		return nil, err
 	}
-	if session.Tunnel.ID != "" {
-		credential, err := s.TunnelCredentials.Credential(ctx, principal)
+	if session.Devtunnel.ID != "" {
+		credential, err := s.DevtunnelCredentials.Credential(ctx, principal)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.releaseTunnel(credential, session.ID, session.Seq, session.Tunnel); err != nil {
+		if err := s.releaseDevtunnel(credential, session.ID, session.Seq, session.Devtunnel); err != nil {
 			return nil, err
 		}
 	}
@@ -281,23 +280,23 @@ func (s Service) Start(ctx context.Context, principal security.Principal, id str
 		return nil, err
 	}
 	return s.launch(ctx, principal, CreateRequest{
-		ID: id, SSHHost: session.SSHHost, Account: session.Account,
+		ID: id, Alias: session.Alias, Account: session.Account,
 		Partition: session.Partition, RootFolder: session.RootFolder, Resources: session.Resources, TunnelModes: session.TunnelModes,
 	})
 }
 
-func (s Service) Attach(ctx context.Context, principal security.Principal, id string, modes []string) (*AttachResponse, error) {
+func (s Service) Attach(ctx context.Context, principal security.Principal, id string, transports []string) (*AttachResponse, error) {
 	previous, err := s.retireFinished(ctx, principal, id)
 	if err != nil {
 		return nil, err
 	}
 	intent := *previous
-	if modes != nil {
-		if intent.TunnelModes, err = canonicalTunnelModes(modes); err != nil {
+	if transports != nil {
+		if intent.TunnelModes, err = canonicalTunnelModes(transports); err != nil {
 			return nil, err
 		}
 	}
-	credential, err := s.tunnelCredential(ctx, principal, intent.TunnelModes)
+	credential, err := s.devtunnelCredential(ctx, principal, intent.TunnelModes)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +307,7 @@ func (s Service) Attach(ctx context.Context, principal security.Principal, id st
 	defer done()
 	var hostToken string
 	var capability sessionCapability
-	intent.State, intent.Launcher, intent.Error, intent.JobID, intent.Node, intent.StartedAt = "QUEUED", launcherClient, "", "", "", time.Time{}
+	intent.State, intent.Platform, intent.Error, intent.JobID, intent.Node, intent.StartedAt = "QUEUED", platformVSCode, "", "", "", time.Time{}
 	if err := s.serialized(id, func() (err error) {
 		intent, hostToken, capability, err = s.claimRun(operationCtx, principal, credential, intent)
 		return err
@@ -316,12 +315,12 @@ func (s Service) Attach(ctx context.Context, principal security.Principal, id st
 		return nil, err
 	}
 	s.sessionStatus(id, "Waiting for the client's Linkspan to connect")
-	response := &AttachResponse{Session: intent.SessionResponse}
-	if slices.Contains(intent.TunnelModes, modeWebsocket) {
+	response := &AttachResponse{Session: intent.SessionResponse, Port: ports(id, intent.Seq).Control}
+	if slices.Contains(intent.TunnelModes, transportLink) {
 		response.Link = &LinkAccess{URL: s.linkURL(id), Token: capability.LinkToken}
 	}
-	if slices.Contains(intent.TunnelModes, modeDevtunnel) {
-		response.Devtunnel = &DevtunnelAccess{ID: intent.Tunnel.ID, Cluster: intent.Tunnel.ClusterID, HostToken: hostToken}
+	if slices.Contains(intent.TunnelModes, transportDevtunnel) {
+		response.Devtunnel = &DevtunnelAccess{ID: intent.Devtunnel.ID, Cluster: intent.Devtunnel.ClusterID, HostToken: hostToken}
 	}
 	return response, nil
 }
@@ -358,15 +357,18 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 	if !alreadyStopped {
 		s.sessionStatus(id, "Stopping session")
 	}
-	credential, _ := s.TunnelCredentials.Credential(operationCtx, principal)
-	managementErr := s.releaseTunnel(credential, snapshot.ID, snapshot.Seq, snapshot.Tunnel)
+	var credential devtunnel.Credential
+	if snapshot.Devtunnel.ID != "" {
+		credential, _ = s.DevtunnelCredentials.Credential(operationCtx, principal)
+	}
+	managementErr := s.releaseDevtunnel(credential, snapshot.ID, snapshot.Seq, snapshot.Devtunnel)
 	if link, ok := s.links.LoadAndDelete(id); ok {
 		_ = link.(*sessionLink).mux.Close()
 	}
 	candidate := snapshot
 	var narration []string
 	if reconcilable(snapshot.State) {
-		if snapshot.Launcher != launcherClient {
+		if snapshot.Platform != platformVSCode {
 			s.sessionStatus(id, "Requesting scheduler cancellation")
 		}
 		stopCtx, cancel := s.ownTimeout()
@@ -385,13 +387,13 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 		}
 		s.narrateReconciled(session, &snapshot, narration)
 		changed := mergeReconciled(session, &snapshot, &candidate, s.utcNow())
-		if session.Seq == snapshot.Seq && session.Tunnel.ID == snapshot.Tunnel.ID {
+		if session.Seq == snapshot.Seq && session.Devtunnel.ID == snapshot.Devtunnel.ID {
 			if managementErr != nil {
 				session.Error = boundedSessionError(managementErr)
 				session.UpdatedAt = s.utcNow()
 				changed = true
-			} else if snapshot.Tunnel.ID != "" {
-				session.Tunnel = tunnelMetadata{}
+			} else if snapshot.Devtunnel.ID != "" {
+				session.Devtunnel = devtunnelMetadata{}
 				session.UpdatedAt = s.utcNow()
 				changed = true
 			}
@@ -416,7 +418,7 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 
 func (s Service) forgetSessionBuffers(id string) {
 	s.logs.forget(id)
-	s.metrics.forget(id)
+	s.usage.forget(id)
 }
 
 func (s Service) forgetUnpersistedBuffers(id string) {
@@ -449,7 +451,7 @@ func (s Service) Delete(principal security.Principal, id string) (*Session, erro
 }
 
 func (s Service) abandonSubmitIntent(credential devtunnel.Credential, intent Session) error {
-	compensateErr := s.releaseTunnel(credential, intent.ID, intent.Seq, intent.Tunnel)
+	compensateErr := s.releaseDevtunnel(credential, intent.ID, intent.Seq, intent.Devtunnel)
 	stateErr := s.Store.locked(func(current *state) error {
 		currentSession := current.Sessions[intent.ID]
 		if currentSession == nil || currentSession.Seq != intent.Seq || currentSession.JobName != intent.JobName || currentSession.JobID != "" {
@@ -459,7 +461,7 @@ func (s Service) abandonSubmitIntent(credential devtunnel.Credential, intent Ses
 		if next == "" {
 			return nil
 		}
-		currentSession.State, currentSession.Tunnel, currentSession.Error, currentSession.UpdatedAt = next, tunnelMetadata{}, "", s.utcNow()
+		currentSession.State, currentSession.Devtunnel, currentSession.Error, currentSession.UpdatedAt = next, devtunnelMetadata{}, "", s.utcNow()
 		if compensateErr != nil {
 			currentSession.Error = boundedSessionError(compensateErr)
 		}
@@ -474,7 +476,7 @@ func (s Service) Define(principal security.Principal, request CreateRequest) (*S
 		return nil, false, err
 	}
 	session := &Session{SessionResponse: SessionResponse{
-		ID: request.ID, State: "STOPPED", Launcher: launcherPlane, SSHHost: request.SSHHost, Account: request.Account,
+		ID: request.ID, State: "STOPPED", Platform: platformJupyterLab, Alias: request.Alias, Account: request.Account,
 		Partition: request.Partition, RootFolder: request.RootFolder, Resources: request.Resources, TunnelModes: request.TunnelModes,
 		CreatedAt: s.utcNow(), UpdatedAt: s.utcNow(),
 	}, Owner: principal}
@@ -496,38 +498,4 @@ func (s Service) Define(principal security.Principal, request CreateRequest) (*S
 		return s.Store.save(current)
 	})
 	return session, created, err
-}
-
-func (s Service) AdoptRuns(principal security.Principal, id string, history SessionHistory) (*Session, error) {
-	if len(history.Runs) == 0 || len(history.Runs) > 50 || slices.ContainsFunc(history.Runs, func(run FinishedRun) bool {
-		return !terminalSession(run.FinalState) || run.EndedAt.IsZero() || len(run.Samples) > maxSessionMetricSamples
-	}) {
-		return nil, security.New("invalid_runs", fmt.Sprintf("runs must be 1 to 50 terminal runs, each with endedAt and at most %d samples", maxSessionMetricSamples), http.StatusBadRequest)
-	}
-	var adopted *Session
-	err := s.Store.locked(func(current *state) error {
-		session := current.Sessions[id]
-		switch {
-		case session == nil:
-			return errSessionNotFound
-		case session.Owner != principal:
-			return errOwnerMismatch
-		case session.Seq != 0 || slices.ContainsFunc(current.Runs, func(run runRecord) bool { return run.SessionID == id }):
-			return errSessionHasHistory
-		}
-		last := history.Runs[len(history.Runs)-1]
-		session.Seq, session.State, session.Error, session.StartedAt = len(history.Runs), last.FinalState, security.TruncateUTF8(last.Error, maxSessionError), last.StartedAt.UTC()
-		session.CreatedAt, session.UpdatedAt = cmp.Or(history.CreatedAt.UTC(), session.CreatedAt), s.utcNow()
-		for index, run := range history.Runs {
-			recordRun(current, runRecord{Run: Run{
-				SessionID: session.ID, Seq: index + 1, SSHHost: session.SSHHost, Account: session.Account,
-				Partition: session.Partition, RootFolder: session.RootFolder, Resources: session.Resources, TunnelModes: session.TunnelModes,
-				FinalState: run.FinalState, Error: security.TruncateUTF8(run.Error, maxSessionError),
-				StartedAt: run.StartedAt.UTC(), EndedAt: run.EndedAt.UTC(), Stats: run.Stats, Samples: run.Samples,
-			}, Owner: principal})
-		}
-		adopted = detached(session)
-		return s.Store.save(current)
-	})
-	return adopted, err
 }

@@ -79,7 +79,7 @@ func TestDevTunnelRejectsMalformedUsedFields(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, response) }))
 			defer server.Close()
-			if _, err := testClient(t, server.URL, server.Client()).Get(context.Background(), GetRequest{AccessToken: "connect", TunnelID: "tunnel-123", ClusterID: "use"}); err == nil {
+			if _, err := testClient(t, server.URL, server.Client()).Get(context.Background(), GetRequest{ConnectToken: "connect", TunnelID: "tunnel-123", ClusterID: "use"}); err == nil {
 				t.Fatal("malformed response accepted")
 			}
 		})

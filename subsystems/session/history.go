@@ -1,7 +1,7 @@
-// Session telemetry owns bounded process-local logs and samples, remote collection, and durable run traces.
-// Logs are sanitized before storage, while metrics and accounting remain principal-scoped remote operations.
+// Session run history owns bounded process-local logs and usage samples, remote collection, and the durable runs.
+// Logs are sanitized before storage, while usage and Slurm accounting remain principal-scoped remote operations.
 // A run freezes when its session ends; accounting may arrive after termination.
-// Incomplete records are retried for a bounded window without changing run identity or blocking samples.
+// Incomplete runs are retried for a bounded window without changing run identity or blocking samples.
 package session
 
 import (
@@ -261,7 +261,7 @@ func (s Service) sessionStatus(sessionID, text string) {
 	s.logs.append(sessionID, text, s.utcNow())
 }
 
-func (s Service) readRemoteSessionTails(ctx context.Context, host string, targets []sessionLogTarget) (map[string]remoteSessionTail, error) {
+func (s Service) readRemoteSessionTails(ctx context.Context, alias string, targets []sessionLogTarget) (map[string]remoteSessionTail, error) {
 	if len(targets) == 0 || len(targets) > maxSessionLogCollections {
 		return nil, errors.New("session log tail request must contain one to four IDs")
 	}
@@ -274,7 +274,7 @@ func (s Service) readRemoteSessionTails(ctx context.Context, host string, target
 		requested[target.id] = true
 		args = append(args, target.id, strconv.Itoa(target.seq))
 	}
-	output, err := s.runner.Run(ctx, host, strings.NewReader(sessionLogTailScript), args...)
+	output, err := s.runner.Run(ctx, alias, strings.NewReader(sessionLogTailScript), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -309,21 +309,21 @@ func (s Service) collectStartingSessionLogs(ctx context.Context, sessions []Sess
 	starting := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
 		if session.State == "STARTING" && idPattern.MatchString(session.ID) &&
-			session.Seq >= 1 && ssh.ValidAlias(session.SSHHost) {
+			session.Seq >= 1 && ssh.ValidAlias(session.Alias) {
 			starting = append(starting, session)
 		}
 	}
 	slices.SortFunc(starting, func(a, b Session) int {
-		return cmp.Or(strings.Compare(a.SSHHost, b.SSHHost), strings.Compare(a.ID, b.ID))
+		return cmp.Or(strings.Compare(a.Alias, b.Alias), strings.Compare(a.ID, b.ID))
 	})
 	for _, session := range starting {
-		s.logs.setSessionSensitive(session.ID, session.PrivateRoot, session.WorkspaceRoot, s.LinkspanPath)
+		s.logs.setSessionSensitive(session.ID, session.PrivateRoot, session.RootFolderPath, s.LinkspanPath)
 	}
 	byScope := groupByScope(starting, func(session Session) schedulerScope {
-		return schedulerScope{owner: session.Owner, host: session.SSHHost}
+		return schedulerScope{owner: session.Owner, alias: session.Alias}
 	})
 	scopes := slices.SortedFunc(maps.Keys(byScope), func(a, b schedulerScope) int {
-		return cmp.Or(strings.Compare(a.host, b.host), strings.Compare(a.owner.Subject, b.owner.Subject))
+		return cmp.Or(strings.Compare(a.alias, b.alias), strings.Compare(a.owner.Subject, b.owner.Subject))
 	})
 	for _, scope := range scopes {
 		targets := make([]sessionLogTarget, len(byScope[scope]))
@@ -334,7 +334,7 @@ func (s Service) collectStartingSessionLogs(ctx context.Context, sessions []Sess
 			if ctx.Err() != nil {
 				return started
 			}
-			tails, err := s.forPrincipal(scope.owner).readRemoteSessionTails(ctx, scope.host, chunk)
+			tails, err := s.forPrincipal(scope.owner).readRemoteSessionTails(ctx, scope.alias, chunk)
 			if err != nil || ctx.Err() != nil {
 				continue
 			}
@@ -349,39 +349,39 @@ func (s Service) collectStartingSessionLogs(ctx context.Context, sessions []Sess
 }
 
 const (
-	maxSessionMetricSamples = 20
-	metricSampleInterval    = 5 * time.Second
+	maxUsageSamples     = 20
+	usageSampleInterval = 5 * time.Second
 )
 
-type sessionMetrics struct {
+type sessionUsage struct {
 	mu     sync.RWMutex
-	series map[string][]MetricSample
+	series map[string][]UsageSample
 }
 
-func (m *sessionMetrics) append(sessionID string, sample MetricSample) {
+func (m *sessionUsage) append(sessionID string, sample UsageSample) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.series[sessionID] = append(m.series[sessionID], sample)
-	if kept := m.series[sessionID]; len(kept) > maxSessionMetricSamples {
-		m.series[sessionID] = kept[len(kept)-maxSessionMetricSamples:]
+	if kept := m.series[sessionID]; len(kept) > maxUsageSamples {
+		m.series[sessionID] = kept[len(kept)-maxUsageSamples:]
 	}
 }
 
-func (m *sessionMetrics) samples(sessionID string) []MetricSample {
+func (m *sessionUsage) samples(sessionID string) []UsageSample {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return slices.Clone(m.series[sessionID])
 }
 
-func (m *sessionMetrics) forget(sessionID string) {
+func (m *sessionUsage) forget(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.series, sessionID)
 }
 
-const maxMetricBodyBytes = 64 << 10
+const maxUsageBodyBytes = 64 << 10
 
-const tunnelAuthorizationHeader = "X-Tunnel-Authorization"
+const devtunnelAuthorizationHeader = "X-Tunnel-Authorization"
 
 func (s Service) sampleAndAccount(ctx context.Context) {
 	s.sampleOnce(ctx)
@@ -398,7 +398,7 @@ func (s Service) sampleOnce(parent context.Context) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(parent, metricSampleInterval)
+	ctx, cancel := context.WithTimeout(parent, usageSampleInterval)
 	defer cancel()
 	var group sync.WaitGroup
 	for _, record := range sessions {
@@ -410,28 +410,28 @@ func (s Service) sampleOnce(parent context.Context) {
 			defer group.Done()
 			sample, err := s.sampleSession(ctx, record)
 			if err == nil {
-				s.metrics.append(record.ID, sample)
+				s.usage.append(record.ID, sample)
 			}
 		}(record)
 	}
 	group.Wait()
 }
 
-func newSessionMetrics() *sessionMetrics {
-	return &sessionMetrics{series: make(map[string][]MetricSample)}
+func newSessionUsage() *sessionUsage {
+	return &sessionUsage{series: make(map[string][]UsageSample)}
 }
 
-func (s Service) sampleSession(ctx context.Context, session Session) (MetricSample, error) {
-	body, status, err := s.linkspan(ctx, session, http.MethodGet, "/api/v1/metrics", nil, maxMetricBodyBytes)
+func (s Service) sampleSession(ctx context.Context, session Session) (UsageSample, error) {
+	body, status, err := s.linkspan(ctx, session, http.MethodGet, "/api/v1/usage", nil, maxUsageBodyBytes)
 	if err != nil {
-		return MetricSample{}, err
+		return UsageSample{}, err
 	}
 	if status != http.StatusOK {
-		return MetricSample{}, errors.New("linkspan did not answer with a sample")
+		return UsageSample{}, errors.New("the job's Linkspan did not answer with a sample")
 	}
-	var sample MetricSample
+	var sample UsageSample
 	if err := json.Unmarshal(body, &sample); err != nil {
-		return MetricSample{}, errors.New("linkspan returned no sample")
+		return UsageSample{}, errors.New("the job's Linkspan returned no sample")
 	}
 	sample.At = s.utcNow()
 	return sample, nil
@@ -441,8 +441,7 @@ const maxRunRecords = 200
 
 type runRecord struct {
 	Run
-	Owner    security.Principal `json:"owner"`
-	Launcher string             `json:"launcher,omitempty"`
+	Owner security.Principal `json:"owner"`
 }
 
 const runStatsWindow = 10 * time.Minute
@@ -466,14 +465,14 @@ func (s Service) runOf(session *Session) runRecord {
 	logTail, _ := s.logs.tail(session.ID)
 	return runRecord{
 		Run: Run{
-			SessionID: session.ID, Seq: session.Seq, SSHHost: session.SSHHost,
+			SessionID: session.ID, Seq: session.Seq, Platform: session.Platform, Alias: session.Alias,
 			Account: session.Account, Partition: session.Partition, RootFolder: session.RootFolder,
 			Resources: session.Resources, TunnelModes: session.TunnelModes,
 			FinalState: session.State, Error: session.Error, StartedAt: session.StartedAt,
-			EndedAt: session.UpdatedAt, Samples: s.metrics.samples(session.ID),
+			EndedAt: session.UpdatedAt, Samples: s.usage.samples(session.ID),
 			Logs: logTail.Lines,
 		},
-		Owner: session.Owner, Launcher: session.Launcher,
+		Owner: session.Owner,
 	}
 }
 
@@ -505,9 +504,9 @@ func (s Service) freezeIfTerminal(current *state, session *Session) (bool, error
 	return true, nil
 }
 
-func (s Service) readRunStats(ctx context.Context, host, name string, startedAt time.Time) (RunStats, error) {
-	usage, err := slurm.Account(ctx, s.runner, host, name, startedAt, s.utcNow())
-	return RunStats(usage), err
+func (s Service) readRunStats(ctx context.Context, alias, name string, startedAt time.Time) (RunStats, error) {
+	stats, err := slurm.Account(ctx, s.runner, alias, name, startedAt, s.utcNow())
+	return RunStats(stats), err
 }
 
 func (s Service) attachRunStats(sessionID string, seq int, stats RunStats) error {
@@ -529,7 +528,7 @@ func (s Service) pendingRunStats() ([]runRecord, error) {
 	var due []runRecord
 	err := s.Store.locked(func(current *state) error {
 		for _, run := range current.Runs {
-			if run.Stats == nil && run.Launcher != launcherClient && !run.EndedAt.Before(cutoff) {
+			if run.Stats == nil && run.Platform != platformVSCode && !run.EndedAt.Before(cutoff) {
 				due = append(due, run)
 			}
 		}
@@ -545,7 +544,7 @@ func (s Service) completeRunStats(parent context.Context) {
 	}
 	for _, run := range due {
 		ctx, cancel := context.WithTimeout(parent, s.runner.EffectiveTimeout())
-		stats, err := s.forPrincipal(run.Owner).readRunStats(ctx, run.SSHHost, jobName(run.SessionID, run.Seq), run.StartedAt)
+		stats, err := s.forPrincipal(run.Owner).readRunStats(ctx, run.Alias, jobName(run.SessionID, run.Seq), run.StartedAt)
 		cancel()
 		if err != nil || !stats.complete() {
 			continue

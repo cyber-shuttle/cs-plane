@@ -4,7 +4,7 @@
 package ssh
 
 type HostEntry struct {
-	Name            string   `json:"name"`
+	Alias           string   `json:"alias"`
 	Hostname        string   `json:"hostname,omitempty"`
 	User            string   `json:"user,omitempty"`
 	Port            int      `json:"port,omitempty"`
@@ -33,7 +33,7 @@ type SSHKeyRequest struct {
 }
 
 type AddHostRequest struct {
-	Name    string `json:"name"`
+	Alias   string `json:"alias"`
 	Command string `json:"command"`
 	Key     string `json:"keyId"`
 }
@@ -44,7 +44,7 @@ type UpdateHostRequest struct {
 }
 
 type HostHealth struct {
-	Host    string `json:"host"`
+	Alias   string `json:"alias"`
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
 }

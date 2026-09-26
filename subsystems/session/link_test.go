@@ -1,6 +1,6 @@
 // Link tests drive a fake Linkspan that holds a real link against cs-plane's handlers and serves ports from loopback
-// servers, so every path a client takes into a job, the Jupyter proxy, the SSH start and forward, and metrics, runs
-// over the link with no Dev Tunnel; the delegated tunnel is exercised through Linkspan's forward route.
+// servers, so every path a client takes into a job, the Jupyter proxy, the SSH start and forward, and usage, runs
+// over the link with no Dev Tunnel; the Dev Tunnel is exercised through Linkspan's forward route.
 package session
 
 import (
@@ -90,7 +90,7 @@ func echoServer(t *testing.T) (string, chan struct{}) {
 	return listener.Addr().String(), ended
 }
 
-func TestTheLinkCarriesJupyterSSHAndMetricsOnDemand(t *testing.T) {
+func TestTheLinkCarriesJupyterSSHAndUsageOnDemand(t *testing.T) {
 	session, service := readyAccessScenario(t)
 	numbers := ports(session.ID, session.Seq)
 	jupyter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,9 +108,9 @@ func TestTheLinkCarriesJupyterSSHAndMetricsOnDemand(t *testing.T) {
 	defer jupyter.Close()
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/metrics":
+		case "/api/v1/usage":
 			used := int64(2048)
-			_ = json.NewEncoder(w).Encode(MetricSample{MemBytes: &used})
+			_ = json.NewEncoder(w).Encode(UsageSample{MemBytes: &used})
 		case "/api/v1/vscode/sessions":
 			var body map[string]string
 			if json.NewDecoder(r.Body).Decode(&body) != nil || body["authorized_key"] != "ssh-ed25519 AAAA" || body["ref"] != "ssh-9de8a23119db6492" {
@@ -255,11 +255,11 @@ func TestALinkForTheCurrentSeqMakesTheRunReady(t *testing.T) {
 	}
 }
 
-func TestADevtunnelOnlyAttachIsReadyAndReachableThroughItsTunnel(t *testing.T) {
+func TestADevtunnelOnlyAttachIsReadyAndReachableThroughItsDevTunnel(t *testing.T) {
 	service := testService(t)
 	defined, _, err := service.Define(testPrincipal, newTestCreateRequest())
 	testutil.Check(t, err)
-	attached, err := service.Attach(context.Background(), testPrincipal, defined.ID, []string{modeDevtunnel})
+	attached, err := service.Attach(context.Background(), testPrincipal, defined.ID, []string{transportDevtunnel})
 	testutil.Check(t, err)
 	if attached.Link != nil || attached.Devtunnel == nil || *attached.Devtunnel != (DevtunnelAccess{ID: defined.ID + "-1", Cluster: "use", HostToken: testHostToken}) {
 		t.Fatalf("devtunnel attach = %#v %#v", attached.Link, attached.Devtunnel)
@@ -272,24 +272,24 @@ func TestADevtunnelOnlyAttachIsReadyAndReachableThroughItsTunnel(t *testing.T) {
 	defer health.Close()
 	control := sessionHost(Session{SessionResponse: attached.Session}, ports(defined.ID, 1).Control)
 	service.transport = newSessionTransport(func(ctx context.Context, _, address string) (net.Conn, error) {
-		if current, err := service.loadSession(defined.ID); err != nil || address != control || service.link(*current) != nil || current.Tunnel.ID == "" {
+		if current, err := service.loadSession(defined.ID); err != nil || address != control || service.link(*current) != nil || current.Devtunnel.ID == "" {
 			return nil, errNoRoute
 		}
 		return (&net.Dialer{}).DialContext(ctx, "tcp", health.Listener.Addr().String())
 	})
 	listed, err := reconciledList(context.Background(), service)
 	if err != nil || listed[0].State != "READY" || listed[0].StartedAt.IsZero() {
-		t.Fatalf("a devtunnel-only run answering through its tunnel = %#v %v", listed, err)
+		t.Fatalf("a devtunnel-only run answering through its Dev Tunnel = %#v %v", listed, err)
 	}
 	if _, err := service.Access(testPrincipal, defined.ID); err != nil {
 		t.Fatalf("access to a devtunnel-only READY run = %v", err)
 	}
 }
 
-func TestTheDelegatedTunnelCarriesAStreamThroughLinkspansForward(t *testing.T) {
+func TestTheDevTunnelCarriesAStreamThroughLinkspansForward(t *testing.T) {
 	echo, _ := echoServer(t)
 	linkspan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/forward/2222" || r.Header.Get(tunnelAuthorizationHeader) != "tunnel "+testConnectToken {
+		if r.URL.Path != "/api/v1/forward/2222" || r.Header.Get(devtunnelAuthorizationHeader) != "tunnel "+testConnectToken {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -303,13 +303,13 @@ func TestTheDelegatedTunnelCarriesAStreamThroughLinkspansForward(t *testing.T) {
 		}
 	}))
 	defer linkspan.Close()
-	conn, err := dialForward(context.Background(), tunnelEndpoint{URI: linkspan.URL, ConnectToken: testConnectToken}, 2222, time.Second)
+	conn, err := dialForward(context.Background(), devtunnelEndpoint{URI: linkspan.URL, ConnectToken: testConnectToken}, 2222, time.Second)
 	testutil.Check(t, err)
 	defer func() { _ = conn.Close() }()
 	_, err = conn.Write([]byte("hello"))
 	testutil.Check(t, err)
 	reply := make([]byte, 5)
 	if _, err := io.ReadFull(conn, reply); err != nil || string(reply) != "hello" {
-		t.Fatalf("tunnel stream = %q %v", reply, err)
+		t.Fatalf("Dev Tunnel stream = %q %v", reply, err)
 	}
 }

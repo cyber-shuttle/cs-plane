@@ -1,4 +1,4 @@
-// Scheduler reconciliation folds neutral Slurm observations into sessions grouped by principal and host.
+// Scheduler reconciliation folds neutral Slurm observations into sessions grouped by principal and SSH host.
 // Slurm vocabulary and wire parsing stay in internal/slurm; this file owns session-state and walltime policy.
 // Silence is not evidence, so a session with no observation stays put until its propagation window expires.
 // Foreground and background refreshes share one serialized, rate-limited service runtime.
@@ -38,7 +38,7 @@ var stateNarration = map[string]string{
 
 type schedulerScope struct {
 	owner security.Principal
-	host  string
+	alias string
 }
 
 func outlivedWalltime(session Session, now time.Time) bool {
@@ -188,16 +188,16 @@ func (s Service) reconcileSnapshots(ctx context.Context, snapshots []Session) ([
 	var wg sync.WaitGroup
 	for i := range results {
 		switch {
-		case results[i].Launcher == launcherClient && results[i].State == "STOPPING":
+		case results[i].Platform == platformVSCode && results[i].State == "STOPPING":
 			results[i].State, results[i].Error = "STOPPED", ""
-		case results[i].Launcher == launcherClient && results[i].State == "QUEUED" && results[i].Tunnel.ID != "":
-			wg.Go(func() { narration[i] = s.probeTunnel(ctx, &results[i]) })
-		case results[i].Launcher != launcherClient && reconcilable(results[i].State):
+		case results[i].Platform == platformVSCode && results[i].State == "QUEUED" && results[i].Devtunnel.ID != "":
+			wg.Go(func() { narration[i] = s.probeDevtunnel(ctx, &results[i]) })
+		case results[i].Platform != platformVSCode && reconcilable(results[i].State):
 			indexes = append(indexes, i)
 		}
 	}
 	byScope := groupByScope(indexes, func(i int) schedulerScope {
-		return schedulerScope{owner: results[i].Owner, host: results[i].SSHHost}
+		return schedulerScope{owner: results[i].Owner, alias: results[i].Alias}
 	})
 	for scope, indexes := range byScope {
 		wg.Add(1)
@@ -207,7 +207,7 @@ func (s Service) reconcileSnapshots(ctx context.Context, snapshots []Session) ([
 			for position, index := range indexes {
 				group[position] = results[index]
 			}
-			observations, cancelErrors, err := s.forPrincipal(scope.owner).schedulerObservations(ctx, scope.host, group)
+			observations, cancelErrors, err := s.forPrincipal(scope.owner).schedulerObservations(ctx, scope.alias, group)
 			if err != nil && ctx.Err() != nil {
 				return
 			}
@@ -269,12 +269,12 @@ func (s Service) reconcileAll(ctx context.Context) error {
 	})
 }
 
-func (s Service) schedulerObservations(ctx context.Context, host string, sessions []Session) (map[string]slurm.Observation, map[string]string, error) {
+func (s Service) schedulerObservations(ctx context.Context, alias string, sessions []Session) (map[string]slurm.Observation, map[string]string, error) {
 	jobs := make([]slurm.Job, len(sessions))
 	for index, session := range sessions {
 		jobs[index] = slurm.Job{ID: session.JobID, Name: session.JobName, Cancel: session.State == "STOPPING", CreatedAt: session.CreatedAt}
 	}
-	statuses, err := slurm.Observe(ctx, s.runner, host, jobs, s.utcNow())
+	statuses, err := slurm.Observe(ctx, s.runner, alias, jobs, s.utcNow())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -292,7 +292,7 @@ func (s Service) schedulerObservations(ctx context.Context, host string, session
 	return observations, cancelErrors, nil
 }
 
-func (s Service) probeTunnel(ctx context.Context, session *Session) []string {
+func (s Service) probeDevtunnel(ctx context.Context, session *Session) []string {
 	if _, status, err := s.linkspan(ctx, *session, http.MethodGet, "/api/v1/health", nil, 1<<10); err != nil || status != http.StatusOK {
 		return nil
 	}

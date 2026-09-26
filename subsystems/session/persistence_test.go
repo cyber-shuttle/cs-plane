@@ -1,4 +1,4 @@
-// Session storage round-trips lifecycle state, replaces sessions and telemetry atomically, and serializes complete
+// Session storage round-trips lifecycle state, replaces sessions and run history atomically, and serializes complete
 // read-modify-write cycles across concurrent writers.
 package session
 
@@ -26,7 +26,7 @@ func testSessionStore(t *testing.T) Store {
 func TestStoreRoundTripsSessionsAndRuns(t *testing.T) {
 	store := testSessionStore(t)
 	session := pendingSession("s-012345abcdef", "delta", "101")
-	run := runRecord{Run: Run{SessionID: session.ID, Seq: 1, SSHHost: "delta", EndedAt: time.Unix(2, 0).UTC()}, Owner: testPrincipal}
+	run := runRecord{Run: Run{SessionID: session.ID, Seq: 1, Alias: "delta", EndedAt: time.Unix(2, 0).UTC()}, Owner: testPrincipal}
 
 	testutil.Check(t, store.locked(func(current *state) error {
 		current.Sessions[session.ID] = &session
@@ -36,7 +36,7 @@ func TestStoreRoundTripsSessionsAndRuns(t *testing.T) {
 
 	testutil.Check(t, store.locked(func(current *state) error {
 		got, ok := current.Sessions[session.ID]
-		if !ok || got.SSHHost != "delta" || got.JobID != "101" {
+		if !ok || got.Alias != "delta" || got.JobID != "101" {
 			t.Fatalf("session did not round-trip: %+v, ok=%v", got, ok)
 		}
 		if len(current.Runs) != 1 || current.Runs[0].SessionID != session.ID || !current.Runs[0].EndedAt.Equal(run.EndedAt) {

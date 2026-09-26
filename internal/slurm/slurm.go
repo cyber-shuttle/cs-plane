@@ -1,7 +1,7 @@
 // Package slurm runs the fixed Slurm programs used by sessions and parses their bounded output.
 // Discovery, submission, status, cancellation, and accounting are neutral protocol operations;
 // principal policy, session transitions, HTTP errors, narration, and persistence remain with sessions.
-// Every multi-command program frames its fields so login banners cannot become scheduler data.
+// Every multi-command program frames its fields so SSH banners cannot become scheduler data.
 package slurm
 
 import (
@@ -159,7 +159,7 @@ type JobStatus struct {
 	CancelError string
 }
 
-type Usage struct {
+type Stats struct {
 	Cores               int
 	RequestedMemory     string
 	ElapsedSeconds      int64
@@ -271,12 +271,12 @@ func parseDiscovery(output string) (Discovery, error) {
 	return Discovery{User: user, Accounts: parseAccounts(parsed[markerAccounts]), Partitions: partitions, Home: home}, nil
 }
 
-func Discover(ctx context.Context, runner ssh.Runner, host string) (Discovery, error) {
+func Discover(ctx context.Context, runner ssh.Runner, alias string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, runner.EffectiveTimeout())
 	defer cancel()
-	stdout, stderr, runErr := runner.RunOutput(ctx, host, runner.EffectiveTimeout(), strings.NewReader(discoveryScript), "sh", "-s")
+	stdout, stderr, runErr := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(discoveryScript), "sh", "-s")
 	if runErr != nil && (errors.Is(runErr, context.DeadlineExceeded) || ssh.AuthenticationFailure(stderr)) {
-		return Discovery{}, ssh.ClassifyFailure(host, stderr, runErr)
+		return Discovery{}, ssh.ClassifyFailure(alias, stderr, runErr)
 	}
 	discovered, parseErr := parseDiscovery(stdout)
 	switch {
@@ -286,22 +286,22 @@ func Discover(ctx context.Context, runner ssh.Runner, host string) (Discovery, e
 		}
 		return Discovery{}, fmt.Errorf("%w: %s", parseErr, ssh.FailureMessage(stderr, runErr))
 	case runErr != nil:
-		return Discovery{}, ssh.ClassifyFailure(host, stderr, runErr)
+		return Discovery{}, ssh.ClassifyFailure(alias, stderr, runErr)
 	default:
 		return discovered, parseErr
 	}
 }
 
-func Check(ctx context.Context, runner ssh.Runner, host, script string) (CheckResult, error) {
-	stdout, stderr, err := runner.RunOutput(ctx, host, runner.EffectiveTimeout(), strings.NewReader(script), "sbatch", "--test-only")
+func Check(ctx context.Context, runner ssh.Runner, alias, script string) (CheckResult, error) {
+	stdout, stderr, err := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(script), "sbatch", "--test-only")
 	if !ssh.AmbiguousExit(err) {
 		return CheckResult{Stdout: stdout, Stderr: stderr, Passed: err == nil}, nil
 	}
-	return CheckResult{}, ssh.ClassifyFailure(host, stderr, err)
+	return CheckResult{}, ssh.ClassifyFailure(alias, stderr, err)
 }
 
 // submitProgram exports the environment and feeds the script to sbatch from stdin, so no value reaches an argv
-// on the shared login node, where any user can list processes.
+// on the shared SSH host, where any user can list processes.
 func submitProgram(request SubmitRequest) (string, error) {
 	if !strings.HasSuffix(request.Script, "\n") || strings.Contains(request.Script, "\n"+submitScriptEnd+"\n") {
 		return "", errors.New("submission script is not newline-terminated or contains its terminator")
@@ -314,13 +314,13 @@ func submitProgram(request SubmitRequest) (string, error) {
 	return program.String(), nil
 }
 
-func Submit(ctx context.Context, runner ssh.Runner, host string, request SubmitRequest) (string, error) {
+func Submit(ctx context.Context, runner ssh.Runner, alias string, request SubmitRequest) (string, error) {
 	program, err := submitProgram(request)
 	if err != nil {
 		return "", err
 	}
 	secrets := slices.Collect(maps.Values(request.Environment))
-	stdout, stderr, runErr := runner.RunOutput(ctx, host, runner.EffectiveTimeout(), strings.NewReader(program),
+	stdout, stderr, runErr := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(program),
 		"sh", "-s", "--", "cs-submit", request.JobName)
 	if runErr != nil {
 		cause := security.Redact(fmt.Sprintf("submit %s failed", request.JobName), errors.New(ssh.FailureMessage(stderr, runErr)), secrets...)
@@ -392,8 +392,8 @@ func statusScript(jobs []Job, now time.Time) string {
 	return script.String()
 }
 
-func Observe(ctx context.Context, runner ssh.Runner, host string, jobs []Job, now time.Time) ([]JobStatus, error) {
-	output, err := runner.Run(ctx, host, strings.NewReader(statusScript(jobs, now)), "sh", "-s", "--", "cs-session-status")
+func Observe(ctx context.Context, runner ssh.Runner, alias string, jobs []Job, now time.Time) ([]JobStatus, error) {
+	output, err := runner.Run(ctx, alias, strings.NewReader(statusScript(jobs, now)), "sh", "-s", "--", "cs-session-status")
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +502,7 @@ func hmsSeconds(value string) float64 {
 	return dayCount*86400 + seconds
 }
 
-func parseUsage(output string) Usage {
+func parseStats(output string) Stats {
 	var rows [][]string
 	for _, line := range strings.Split(output, "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
@@ -510,7 +510,7 @@ func parseUsage(output string) Usage {
 		}
 	}
 	if len(rows) == 0 {
-		return Usage{}
+		return Stats{}
 	}
 	alloc, used := rows[0], rows[0]
 	for _, row := range rows {
@@ -525,36 +525,36 @@ func parseUsage(output string) Usage {
 			break
 		}
 	}
-	usage := Usage{}
+	stats := Stats{}
 	if cores, err := strconv.Atoi(strings.TrimSpace(field(alloc, 1))); err == nil && cores > 0 {
-		usage.Cores = cores
+		stats.Cores = cores
 	}
 	if elapsed, err := strconv.ParseInt(strings.TrimSpace(field(alloc, 3)), 10, 64); err == nil {
-		usage.ElapsedSeconds = elapsed
+		stats.ElapsedSeconds = elapsed
 	}
 	requestedKiB, hasRequested := parseKiB(field(alloc, 2))
 	allocatedCPUSeconds, _ := strconv.ParseFloat(strings.TrimSpace(field(alloc, 4)), 64)
 	maxRSSKiB, hasMaxRSS := parseKiB(field(used, 5))
 	usedCPUSeconds := hmsSeconds(field(used, 6))
 	if hasRequested {
-		usage.RequestedMemory = humanKiB(requestedKiB)
+		stats.RequestedMemory = humanKiB(requestedKiB)
 	}
 	if hasMaxRSS {
-		usage.MaxRSS = humanKiB(maxRSSKiB)
+		stats.MaxRSS = humanKiB(maxRSSKiB)
 	}
 	if usedCPUSeconds > 0 && allocatedCPUSeconds > 0 {
-		usage.CPUEfficiencyPct = usedCPUSeconds / allocatedCPUSeconds * 100
+		stats.CPUEfficiencyPct = usedCPUSeconds / allocatedCPUSeconds * 100
 	}
 	if hasMaxRSS && hasRequested && requestedKiB > 0 {
-		usage.MemoryEfficiencyPct = maxRSSKiB / requestedKiB * 100
+		stats.MemoryEfficiencyPct = maxRSSKiB / requestedKiB * 100
 	}
-	return usage
+	return stats
 }
 
-func Account(ctx context.Context, runner ssh.Runner, host, name string, startedAt, now time.Time) (Usage, error) {
-	output, err := runner.Run(ctx, host, nil, "sacct", "-P", "-n", "--units=K", "--starttime="+lookback(startedAt, now), "--name="+name, "--format="+accountingFormat)
+func Account(ctx context.Context, runner ssh.Runner, alias, name string, startedAt, now time.Time) (Stats, error) {
+	output, err := runner.Run(ctx, alias, nil, "sacct", "-P", "-n", "--units=K", "--starttime="+lookback(startedAt, now), "--name="+name, "--format="+accountingFormat)
 	if err != nil {
-		return Usage{}, err
+		return Stats{}, err
 	}
-	return parseUsage(strings.TrimSpace(output)), nil
+	return parseStats(strings.TrimSpace(output)), nil
 }

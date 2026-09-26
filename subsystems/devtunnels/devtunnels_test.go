@@ -1,6 +1,6 @@
-// Link broker tests cover principal-bound authorization, sealed persistence, refresh serialization, and
+// Broker tests cover principal-bound authorization, sealed persistence, refresh serialization, and
 // route wiring. Provider wire behavior belongs to internal/devtunnel tests.
-package tunnel
+package devtunnels
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func (a *fakeAuthorizer) Refresh(context.Context, string, string) (devtunnel.Aut
 	return a.refresh, nil
 }
 
-func newTestLinkBroker(t *testing.T) (*Service, string) {
+func newTestBroker(t *testing.T) (*Service, string) {
 	t.Helper()
 	dir := t.TempDir()
 	hostsDir := filepath.Join(dir, "hosts")
@@ -55,8 +55,8 @@ func newTestLinkBroker(t *testing.T) (*Service, string) {
 	return newService(dir, hostsDir, &box, nil), hostsDir
 }
 
-func TestLinkBrokerPollStoresSealedCredential(t *testing.T) {
-	broker, hostsDir := newTestLinkBroker(t)
+func TestBrokerPollStoresSealedCredential(t *testing.T) {
+	broker, hostsDir := newTestBroker(t)
 	principal := security.Principal{Subject: "owner", Tenant: "custos"}
 	now := time.Now()
 	broker.now = func() time.Time { return now }
@@ -73,19 +73,19 @@ func TestLinkBrokerPollStoresSealedCredential(t *testing.T) {
 	now = now.Add(time.Second)
 	poll, err := broker.poll(context.Background(), principal, start.Handle)
 	testutil.Check(t, err)
-	if encoded, _ := json.Marshal(poll); !strings.HasPrefix(string(encoded), `{"status":"linked","linked":true,"provider":"github","account":"octocat"`) {
+	if encoded, _ := json.Marshal(poll); !strings.HasPrefix(string(encoded), `{"status":"connected","connected":true,"provider":"github","account":"octocat"`) {
 		t.Fatalf("poll = %s", encoded)
 	}
 
-	path := filepath.Join(hostsDir, security.PrincipalDirName(principal), tunnelLinkFileName)
+	path := filepath.Join(hostsDir, security.PrincipalDirName(principal), accountFileName)
 	sealed, err := os.ReadFile(path)
 	testutil.Check(t, err)
 	if strings.Contains(string(sealed), "gho_the_token") {
-		t.Fatal("the sealed file holds the access token in the clear")
+		t.Fatal("the sealed file holds the OAuth token in the clear")
 	}
 	status, err := broker.status(principal)
 	testutil.Check(t, err)
-	if !status.Linked || status.Account != "octocat" {
+	if !status.Connected || status.Account != "octocat" {
 		t.Fatalf("status = %#v", status)
 	}
 	testutil.Check(t, broker.delete(principal))
@@ -94,16 +94,16 @@ func TestLinkBrokerPollStoresSealedCredential(t *testing.T) {
 	}
 }
 
-func TestLinkBrokerCredentialIsEmptyWithoutALink(t *testing.T) {
-	broker, _ := newTestLinkBroker(t)
+func TestBrokerCredentialIsEmptyWithoutAnAccount(t *testing.T) {
+	broker, _ := newTestBroker(t)
 	credential, err := broker.Credential(context.Background(), security.Principal{Subject: "owner", Tenant: "custos"})
 	if err != nil || credential != (devtunnel.Credential{}) {
 		t.Fatalf("credential = %#v, %v", credential, err)
 	}
 }
 
-func TestLinkBrokerSerializesPollAndDeleteAcrossBrokers(t *testing.T) {
-	broker, _ := newTestLinkBroker(t)
+func TestBrokerSerializesPollAndDeleteAcrossBrokers(t *testing.T) {
+	broker, _ := newTestBroker(t)
 	other := newService(broker.stateDir, broker.principalDir, broker.box, nil)
 	principal := security.Principal{Subject: "owner", Tenant: "custos"}
 	now := time.Now()
@@ -126,13 +126,13 @@ func TestLinkBrokerSerializesPollAndDeleteAcrossBrokers(t *testing.T) {
 	close(release)
 	testutil.Check(t, <-pollDone)
 	testutil.Check(t, <-deleteDone)
-	if _, found, err := broker.loadLink(principal); err != nil || found {
-		t.Fatalf("link after Delete = found %v, error %v", found, err)
+	if _, found, err := broker.loadAccount(principal); err != nil || found {
+		t.Fatalf("account after Delete = found %v, error %v", found, err)
 	}
 }
 
-func TestLinkBrokerRefreshesExpiringCredential(t *testing.T) {
-	broker, _ := newTestLinkBroker(t)
+func TestBrokerRefreshesExpiringCredential(t *testing.T) {
+	broker, _ := newTestBroker(t)
 	principal := security.Principal{Subject: "owner", Tenant: "custos"}
 	fixed := time.Now()
 	broker.now = func() time.Time { return fixed }
@@ -143,32 +143,32 @@ func TestLinkBrokerRefreshesExpiringCredential(t *testing.T) {
 			RefreshToken: "new-refresh", ExpiresIn: time.Hour,
 		},
 	}
-	testutil.Check(t, broker.saveLink(principal, tunnelLink{
+	testutil.Check(t, broker.saveAccount(principal, account{
 		Provider: "microsoft", Scheme: "Bearer", AccessToken: "old-access", RefreshToken: "old-refresh",
-		ExpiresAt: fixed.Add(time.Minute), Account: "someone", LinkedAt: fixed,
+		ExpiresAt: fixed.Add(time.Minute), Account: "someone", ConnectedAt: fixed,
 	}))
 	credential, err := broker.Credential(context.Background(), principal)
 	testutil.Check(t, err)
 	testutil.Equal(t, credential, devtunnel.Credential{Scheme: "Bearer", Token: "new-access"}, "credential")
-	link, ok, err := broker.loadLink(principal)
+	stored, ok, err := broker.loadAccount(principal)
 	testutil.Check(t, err)
-	if !ok || link.RefreshToken != "new-refresh" || !link.ExpiresAt.Equal(fixed.Add(time.Hour)) {
-		t.Fatalf("stored link after refresh = %#v", link)
+	if !ok || stored.RefreshToken != "new-refresh" || !stored.ExpiresAt.Equal(fixed.Add(time.Hour)) {
+		t.Fatalf("stored account after refresh = %#v", stored)
 	}
 }
 
 func TestRoutesAnswerStatusAndPollOverHTTP(t *testing.T) {
-	broker, _ := newTestLinkBroker(t)
+	broker, _ := newTestBroker(t)
 	handler, err := router.New(broker.Routes())
 	testutil.Check(t, err)
 	principal := security.Principal{Subject: "owner", Tenant: "custos"}
 	ctx := security.WithPrincipal(context.Background(), principal)
 
-	status := testutil.Serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/tunnel", nil).WithContext(ctx))
-	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"linked":false`) {
-		t.Fatalf("link status = %d %s", status.Code, status.Body.String())
+	status := testutil.Serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/devtunnels", nil).WithContext(ctx))
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"connected":false`) {
+		t.Fatalf("account status = %d %s", status.Code, status.Body.String())
 	}
-	poll := testutil.Serve(handler, httptest.NewRequest(http.MethodPost, "/api/v1/tunnel/authorizations/no-such-handle/poll", nil).WithContext(ctx))
+	poll := testutil.Serve(handler, httptest.NewRequest(http.MethodPost, "/api/v1/devtunnels/authorizations/no-such-handle/poll", nil).WithContext(ctx))
 	if poll.Code != http.StatusNotFound {
 		t.Fatalf("poll of an unknown handle = %d %s, want 404", poll.Code, poll.Body.String())
 	}

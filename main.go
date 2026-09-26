@@ -1,6 +1,6 @@
-// Package main is cs-plane's single binary, cs, one server for many users that binds to loopback behind a TLS proxy.
+// Package main is cs-plane's single binary, cs, one service for many users that binds to loopback behind a TLS proxy.
 // run dispatches the CLI; serve validates before listening. newServeComponents composes authentication, SSH,
-// session, and tunnel-link owners over one state directory and closes them on failure or shutdown.
+// session, and Dev Tunnels account owners over one state directory and closes them on failure or shutdown.
 package main
 
 import (
@@ -25,10 +25,10 @@ import (
 	"github.com/cyber-shuttle/cs-plane/internal/router"
 	"github.com/cyber-shuttle/cs-plane/internal/security"
 	"github.com/cyber-shuttle/cs-plane/internal/ssh"
+	"github.com/cyber-shuttle/cs-plane/subsystems/devtunnels"
 	"github.com/cyber-shuttle/cs-plane/subsystems/oauth"
 	"github.com/cyber-shuttle/cs-plane/subsystems/session"
 	sshapi "github.com/cyber-shuttle/cs-plane/subsystems/ssh"
-	"github.com/cyber-shuttle/cs-plane/subsystems/tunnel"
 )
 
 const (
@@ -49,12 +49,12 @@ func printUsage() {
   cs help
   cs version
 
-Identity (Custos login):
+Identity (Custos sign-in):
   --oidc-issuer ISSUER (default https://cilogon.org)
   --oidc-client-id CLIENT_ID (required)
   --custos-url URL (required), e.g. https://custos.cybershuttle.org
   --public-url URL (required), the https URL browsers and session jobs reach cs at
-  CS_OIDC_CLIENT_SECRET=SECRET (required, for the sign-in relay's token exchange)
+  CS_OIDC_CLIENT_SECRET=SECRET (required, for the sign-in token exchange)
 
 State:
   CS_DATABASE_URL=URL (required), a Postgres URL whose search_path names the schema cs owns
@@ -62,7 +62,7 @@ State:
 Trusted session configuration:
   --linkspan PATH or CS_LINKSPAN=PATH
   --devtunnel-management-url URL or CS_DEVTUNNEL_MANAGEMENT_URL=URL
-  Linkspan defaults to `+session.DefaultLinkspanPath+`, which each host resolves
+  Linkspan defaults to `+session.DefaultLinkspanPath+`, which each SSH host resolves
   against its own home and which creating a session installs when missing.`)
 }
 
@@ -80,15 +80,15 @@ func defaultStateDir() string {
 }
 
 type services struct {
-	DatabaseURL   string
-	PublicURL     string
-	Configs       ssh.Configurations
-	SessionStore  session.Store
-	LinkspanPath  string
-	TunnelManager session.TunnelManager
-	CapabilityDir string
-	TunnelTimeout time.Duration
-	Origins       security.Origins
+	DatabaseURL      string
+	PublicURL        string
+	Configs          ssh.Configurations
+	SessionStore     session.Store
+	LinkspanPath     string
+	DevtunnelManager session.DevtunnelManager
+	CapabilityDir    string
+	UpstreamTimeout  time.Duration
+	Origins          security.Origins
 }
 
 type serveComponents struct {
@@ -120,22 +120,22 @@ func newServeComponents(svcs services, authentication *oauth.Service) (*serveCom
 	if err != nil {
 		return fail(err)
 	}
-	tunnelService, err := tunnel.NewService(svcs.SessionStore.Dir, svcs.Configs.Dir, nil)
+	devtunnelsService, err := devtunnels.NewService(svcs.SessionStore.Dir, svcs.Configs.Dir, nil)
 	if err != nil {
 		return fail(err)
 	}
-	components.closers = append(components.closers, tunnelService.Close)
+	components.closers = append(components.closers, devtunnelsService.Close)
 	sessionService := session.NewService(session.Config{
-		Runners: svcs.Configs, Store: svcs.SessionStore, LinkspanPath: svcs.LinkspanPath, TunnelManager: svcs.TunnelManager,
-		TunnelCredentials: tunnelService, CapabilityDir: svcs.CapabilityDir, PublicURL: svcs.PublicURL,
-		TunnelTimeout: svcs.TunnelTimeout, Origins: svcs.Origins,
+		Runners: svcs.Configs, Store: svcs.SessionStore, LinkspanPath: svcs.LinkspanPath, DevtunnelManager: svcs.DevtunnelManager,
+		DevtunnelCredentials: devtunnelsService, CapabilityDir: svcs.CapabilityDir, PublicURL: svcs.PublicURL,
+		UpstreamTimeout: svcs.UpstreamTimeout, Origins: svcs.Origins,
 	})
 	components.closers = append(components.closers, sessionService.Close)
 	registryRoutes, err := router.New(
 		authentication.Routes(),
 		sshService.Routes(),
 		sessionService.Routes(),
-		tunnelService.Routes(),
+		devtunnelsService.Routes(),
 	)
 	if err != nil {
 		return fail(err)
@@ -165,7 +165,7 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 	oidcIssuer := flags.String("oidc-issuer", defaultOIDCIssuer, "OIDC issuer validated against its own discovery document and JWKS")
 	oidcClientID := flags.String("oidc-client-id", "", "OIDC client ID pinned as the ID token audience")
 	custosURL := flags.String("custos-url", "", "Custos base URL resolving a validated ID token to a user via GET {custos-url}/me")
-	publicURL := flags.String("public-url", "", "HTTPS URL clients and session jobs reach this server at, such as https://api.example.edu")
+	publicURL := flags.String("public-url", "", "HTTPS URL clients and session jobs reach cs-plane at, such as https://api.example.edu")
 	var allowedOrigins []string
 	flags.Func("allowed-origin", "exact browser origin allowed to call the API (repeatable)", func(value string) error {
 		allowedOrigins = append(allowedOrigins, value)
@@ -266,7 +266,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "serve":
-		tunnelManager, err := devtunnel.NewClient(*devTunnelManagementURL, nil)
+		devtunnelManager, err := devtunnel.NewClient(*devTunnelManagementURL, nil)
 		if err != nil {
 			return err
 		}
@@ -282,7 +282,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		return runServe(ctx, services{
 			Configs: configs, SessionStore: session.Store{Dir: stateDir}, LinkspanPath: *linkspan,
-			TunnelManager: tunnelManager, CapabilityDir: credentialDir, TunnelTimeout: sshTimeout,
+			DevtunnelManager: devtunnelManager, CapabilityDir: credentialDir, UpstreamTimeout: sshTimeout,
 		}, args[1:], net.Listen)
 	case "help", "-h", "--help":
 		printUsage()

@@ -1,18 +1,18 @@
 // The JSON shapes this package's routes read and write, kept in this file alone so clients generate their
 // TypeScript types from it with tygo; every other type here is internal.
 
-package tunnel
+package devtunnels
 
 import "time"
 
-type TunnelLinkStatus struct {
-	Linked   bool      `json:"linked"`
-	Provider string    `json:"provider,omitempty"`
-	Account  string    `json:"account,omitempty"`
-	LinkedAt time.Time `json:"linkedAt,omitzero"`
+type AccountStatus struct {
+	Connected   bool      `json:"connected"`
+	Provider    string    `json:"provider,omitempty"`
+	Account     string    `json:"account,omitempty"`
+	ConnectedAt time.Time `json:"connectedAt,omitzero"`
 }
 
-type TunnelLinkStart struct {
+type AuthorizationStart struct {
 	Handle           string `json:"handle"`
 	UserCode         string `json:"userCode"`
 	VerificationURI  string `json:"verificationUri"`
@@ -20,12 +20,12 @@ type TunnelLinkStart struct {
 	IntervalSeconds  int64  `json:"intervalSeconds"`
 }
 
-type TunnelLinkPoll struct {
-	Status           string `json:"status"`
-	IntervalSeconds  int64  `json:"intervalSeconds,omitempty"`
-	TunnelLinkStatus `tstype:",extends"`
+type AuthorizationPoll struct {
+	Status          string `json:"status"`
+	IntervalSeconds int64  `json:"intervalSeconds,omitempty"`
+	AccountStatus   `tstype:",extends"`
 }
 
-type StartLinkRequest struct {
+type AuthorizationRequest struct {
 	Provider string `json:"provider"`
 }

@@ -1,4 +1,4 @@
-// Tests the sign-in relay: config discovery, code exchange, refresh, the device poll, redirect-origin refusal, and
+// Tests the sign-in routes: config discovery, code exchange, refresh, the device poll, redirect-origin refusal, and
 // which routes require a browser Origin.
 package oauth
 
@@ -18,7 +18,7 @@ import (
 	"github.com/cyber-shuttle/cs-plane/internal/testutil"
 )
 
-func newTestSignInRelay(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler, *httptest.Server) {
+func newTestSignIn(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler, *httptest.Server) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	testutil.Check(t, err)
@@ -30,13 +30,13 @@ func newTestSignInRelay(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler
 		case "/keys":
 			exponent := big.NewInt(int64(key.E)).Bytes()
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
-				"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "relay-key",
+				"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "signin-key",
 				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(exponent),
 			}}})
 		case "/token", "/device":
 			tokenRoute(w, r)
 		default:
-			t.Errorf("unexpected relay request %s", r.URL)
+			t.Errorf("unexpected issuer request %s", r.URL)
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -50,7 +50,7 @@ func newTestSignInRelay(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler
 }
 
 func TestSignInConfigAnswersCanonicalRoute(t *testing.T) {
-	handler, server := newTestSignInRelay(t, nil)
+	handler, server := newTestSignIn(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/oauth/config", nil)
 	request.Header.Set("Origin", "https://workspace.example.edu")
 	response := testutil.Serve(handler, request)
@@ -73,7 +73,7 @@ func TestSignInConfigAnswersCanonicalRoute(t *testing.T) {
 }
 
 func TestSignInExchangeRedeemsACode(t *testing.T) {
-	handler, _ := newTestSignInRelay(t, func(w http.ResponseWriter, r *http.Request) {
+	handler, _ := newTestSignIn(t, func(w http.ResponseWriter, r *http.Request) {
 		testutil.Check(t, r.ParseForm())
 		if r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code") != "the-code" ||
 			r.Form.Get("code_verifier") != "the-verifier" || r.Form.Get("client_secret") != "the-client-secret" ||
@@ -106,7 +106,7 @@ func TestSignInExchangeRedeemsACode(t *testing.T) {
 }
 
 func TestSignInRefreshRotatesTokens(t *testing.T) {
-	handler, _ := newTestSignInRelay(t, func(w http.ResponseWriter, r *http.Request) {
+	handler, _ := newTestSignIn(t, func(w http.ResponseWriter, r *http.Request) {
 		testutil.Check(t, r.ParseForm())
 		if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "old-refresh-token" {
 			t.Fatalf("refresh request = %v", r.Form)
@@ -125,7 +125,7 @@ func TestSignInRefreshRotatesTokens(t *testing.T) {
 
 func TestDeviceSignInPollsWithoutABearerOrAnOrigin(t *testing.T) {
 	approved := false
-	handler, _ := newTestSignInRelay(t, func(w http.ResponseWriter, r *http.Request) {
+	handler, _ := newTestSignIn(t, func(w http.ResponseWriter, r *http.Request) {
 		testutil.Check(t, r.ParseForm())
 		switch {
 		case r.URL.Path == "/device":

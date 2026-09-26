@@ -17,7 +17,7 @@ import (
 
 func TestDiscoveryParsesOneFramedSnapshot(t *testing.T) {
 	output := strings.Join([]string{
-		"login banner", markerUser, "alice", markerAccounts, "Account|", "project-b|", "project-a|", markerPartitions,
+		"SSH banner", markerUser, "alice", markerAccounts, "Account|", "project-b|", "project-a|", markerPartitions,
 		"cpu*|64|256000|gpu:a100:4(IDX:0-3),license:1", markerHome, "/home/alice", markerDone, "",
 	}, "\n")
 	got, err := parseDiscovery(output)
@@ -122,9 +122,9 @@ func TestStatusParsesCancellationQueueAndAccounting(t *testing.T) {
 	}
 }
 
-func TestAccountingSelectsAllocationAndBatchUsage(t *testing.T) {
-	got := parseUsage("8123|4|8192K|120|480|0K|00:00:00\n8123.batch|4|8192K|120|480|4096K|00:04:00\n")
+func TestAccountingSelectsTheJobAndBatchStepStats(t *testing.T) {
+	got := parseStats("8123|4|8192K|120|480|0K|00:00:00\n8123.batch|4|8192K|120|480|4096K|00:04:00\n")
 	if got.Cores != 4 || got.RequestedMemory != "8.0 MB" || got.ElapsedSeconds != 120 || got.MaxRSS != "4.0 MB" || got.CPUEfficiencyPct != 50 || got.MemoryEfficiencyPct != 50 {
-		t.Fatalf("usage = %+v", got)
+		t.Fatalf("stats = %+v", got)
 	}
 }

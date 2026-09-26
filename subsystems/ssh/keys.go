@@ -1,6 +1,6 @@
 // SSH key handling validates names and private-key material before writing metadata and protected bytes. A staged
 // filename binds an interrupted write to committed metadata so startup can promote or discard it without reading key
-// contents. API responses expose only public metadata; deletion also clears host references and rerenders config.
+// contents. API responses expose only public metadata; deletion also clears SSH host references and rerenders config.
 package ssh
 
 import (

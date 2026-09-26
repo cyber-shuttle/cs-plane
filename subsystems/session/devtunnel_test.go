@@ -1,4 +1,4 @@
-// Session tunnel tests protect capability files, secret separation, and compensation.
+// Session Dev Tunnel tests protect capability files, secret separation, and compensation.
 // Capabilities remain strict private files and reject malformed data or symlink traversal.
 // Persisted session payloads never contain connection, host, link or Jupyter tokens.
 // An uncertain provider create is deleted without exposing its credential in errors.
@@ -91,35 +91,35 @@ func TestSessionCapabilityRefusesInvalidRecordsAndSymlinks(t *testing.T) {
 	}
 }
 
-func accessTestService(t *testing.T, manager TunnelManager) Service {
+func accessTestService(t *testing.T, manager DevtunnelManager) Service {
 	t.Helper()
 	service := newTestService(t, ssh.Runner{}, testSessionStore(t))
-	service.TunnelManager, service.CapabilityDir = manager, t.TempDir()+"/credentials"
+	service.DevtunnelManager, service.CapabilityDir = manager, t.TempDir()+"/credentials"
 	return service
 }
 
-func TestCreateSessionTunnelPersistsCapabilityOnlyInPrivateCredential(t *testing.T) {
-	manager := &testTunnelManager{}
+func TestCreateSessionDevtunnelPersistsCapabilityOnlyInPrivateCredential(t *testing.T) {
+	manager := &testDevtunnelManager{}
 	service := accessTestService(t, manager)
 	session := pendingSession("s-012345abcdef", "delta", "")
 	hostToken, capability, err := service.issueSession(context.Background(), &session, testPrincipal, devtunnel.Credential{Scheme: "Bearer", Token: "oauth-token"}, 1)
 	testutil.Check(t, err)
 	stored, err := getCapability(service.CapabilityDir, session.ID, session.Seq)
-	if err != nil || stored != capability || capability.JupyterToken == capability.LinkToken || capability.ConnectToken == "" || hostToken == "" || session.Tunnel.ID == "" {
-		t.Fatalf("private capability = %#v, host token %q, tunnel %q: %v", stored, hostToken, session.Tunnel.ID, err)
+	if err != nil || stored != capability || capability.JupyterToken == capability.LinkToken || capability.ConnectToken == "" || hostToken == "" || session.Devtunnel.ID == "" {
+		t.Fatalf("private capability = %#v, host token %q, Dev Tunnel %q: %v", stored, hostToken, session.Devtunnel.ID, err)
 	}
 	persistedSession, err := json.Marshal(session)
 	testutil.Check(t, err)
 	for _, secret := range []string{stored.JupyterToken, stored.LinkToken, stored.ConnectToken, hostToken} {
 		if strings.Contains(string(persistedSession), secret) {
-			t.Fatalf("session state contains seq secret: %s", persistedSession)
+			t.Fatalf("session state contains a run secret: %s", persistedSession)
 		}
 	}
 }
 
-func TestCreateSessionTunnelCompensatesUncertainCreateError(t *testing.T) {
+func TestCreateSessionDevtunnelCompensatesUncertainCreateError(t *testing.T) {
 	const oauth = "oauth-token-must-not-leak"
-	manager := &testTunnelManager{
+	manager := &testDevtunnelManager{
 		createErr: errors.New("create response was ambiguous"),
 		deleteErr: errors.New("delete failed with " + oauth),
 	}

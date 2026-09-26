@@ -105,7 +105,7 @@ if [ "$wire_command" = "'sh' '-s'" ]; then
     [ -z "${FAKE_DISCOVERY_STARTED:-}" ] || printf '1' > "$FAKE_DISCOVERY_STARTED"
     while [ -n "${FAKE_DISCOVERY_RELEASE:-}" ] && [ ! -e "$FAKE_DISCOVERY_RELEASE" ]; do sleep .01; done
   fi
-  printf 'REMOTE LOGIN BANNER\n' >&2
+  printf 'REMOTE SSH BANNER\n' >&2
   user=${FAKE_REMOTE_USER:-tester}
   printf '%s\n' "$DISC_USER"
   case "$user" in ''|*[!A-Za-z0-9_.-]*) printf '%s\n' "$DISC_ERROR_USER"; exit 72;; esac
@@ -198,9 +198,9 @@ func newTestService(t *testing.T, runner ssh.Runner, store Store) Service {
 	service := Service{
 		Config: Config{
 			Runners: testRunnerProvider{runner: runner}, Store: store, LinkspanPath: "/opt/cybershuttle/linkspan",
-			TunnelTimeout: runner.EffectiveTimeout(), PublicURL: "https://plane.example.edu",
+			UpstreamTimeout: runner.EffectiveTimeout(), PublicURL: "https://plane.example.edu",
 		},
-		runner: runner, logs: newSessionLogs(), metrics: newSessionMetrics(),
+		runner: runner, logs: newSessionLogs(), usage: newSessionUsage(),
 		hostPreparations: &sync.Map{}, now: time.Now, runtime: newSessionRuntime(), links: &sync.Map{},
 	}
 	t.Cleanup(service.Close)
@@ -217,12 +217,12 @@ func testService(t *testing.T) Service {
 	sshBin, _, _ := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
 	service.now = func() time.Time { return time.Unix(1, 0).UTC() }
-	configureTestTunnel(t, &service)
+	configureTestDevtunnel(t, &service)
 	return service
 }
 
 func newTestCreateRequest() CreateRequest {
-	return CreateRequest{ID: "s-012345abcdef", IdempotencyKey: "request-one", SSHHost: "delta", Account: "project-a", Partition: "cpu", RootFolder: "projects/example", Resources: Resources{Cores: 4, MemoryMB: 4096, WallMinutes: 60}, TunnelModes: []string{modeDevtunnel, modeWebsocket}}
+	return CreateRequest{ID: "s-012345abcdef", IdempotencyKey: "request-one", Alias: "delta", Account: "project-a", Partition: "cpu", RootFolder: "projects/example", Resources: Resources{Cores: 4, MemoryMB: 4096, WallMinutes: 60}, TunnelModes: []string{transportDevtunnel, transportLink}}
 }
 
 func TestSessionLifecycleUsesManagedLinkspanAndSeparateRoots(t *testing.T) {
@@ -230,10 +230,10 @@ func TestSessionLifecycleUsesManagedLinkspanAndSeparateRoots(t *testing.T) {
 	cancellations := filepath.Join(t.TempDir(), "cancellations")
 	t.Setenv("FAKE_SCANCEL_LOG", cancellations)
 	service := fakeSSHService(t, sshBin)
-	configureTestTunnel(t, &service)
+	configureTestDevtunnel(t, &service)
 	session, err := defineAndStart(context.Background(), service, newTestCreateRequest())
 	testutil.Check(t, err)
-	if session.State != "QUEUED" || session.PrivateRoot != "/home/tester/.cybershuttle/sessions/s-012345abcdef" || session.WorkspaceRoot != "/home/tester/projects/example" {
+	if session.State != "QUEUED" || session.PrivateRoot != "/home/tester/.cybershuttle/sessions/s-012345abcdef" || session.RootFolderPath != "/home/tester/projects/example" {
 		t.Fatalf("unexpected session: %#v", session)
 	}
 	t.Setenv("FAKE_SESSION_STDOUT", "Linkspan started\n")
@@ -267,7 +267,7 @@ func TestConcurrentStartsLaunchOneRun(t *testing.T) {
 	t.Setenv("FAKE_DISCOVERY_STARTED", started)
 	t.Setenv("FAKE_DISCOVERY_RELEASE", release)
 	service := fakeSSHService(t, sshBin)
-	configureTestTunnel(t, &service)
+	configureTestDevtunnel(t, &service)
 
 	session, _, err := service.Define(testPrincipal, newTestCreateRequest())
 	testutil.Check(t, err)
@@ -290,16 +290,16 @@ func TestConcurrentStartsLaunchOneRun(t *testing.T) {
 	}
 }
 
-func TestOnlyTheDevtunnelModeMakesATunnelAndItNeedsALinkedAccount(t *testing.T) {
+func TestOnlyTheDevtunnelTransportMakesADevTunnelAndItNeedsAnAccount(t *testing.T) {
 	sshBin, _, commandLog := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
-	manager := configureTestTunnel(t, &service)
+	manager := configureTestDevtunnel(t, &service)
 	request := newTestCreateRequest()
-	request.TunnelModes = []string{modeWebsocket}
+	request.TunnelModes = []string{transportLink}
 	session, err := defineAndStart(context.Background(), service, request)
 	testutil.Check(t, err)
-	if session.State != "QUEUED" || session.Tunnel.ID != "" || len(manager.creates) != 0 {
-		t.Fatalf("a websocket session made a tunnel: %#v, %d creates", session, len(manager.creates))
+	if session.State != "QUEUED" || session.Devtunnel.ID != "" || len(manager.creates) != 0 {
+		t.Fatalf("a link session made a Dev Tunnel: %#v, %d creates", session, len(manager.creates))
 	}
 	submitted := string(mustRead(t, os.Getenv("FAKE_SUBMIT_ENV")))
 	for _, want := range []string{"CS_LINK_URL=wss://plane.example.edu/api/v1/sessions/" + session.ID + "/link", "LINKSPAN_LINK_TOKEN="} {
@@ -307,37 +307,37 @@ func TestOnlyTheDevtunnelModeMakesATunnelAndItNeedsALinkedAccount(t *testing.T) 
 			t.Fatalf("submission is missing %q:\n%s", want, submitted)
 		}
 	}
-	if strings.Contains(submitted, "CS_TUNNEL_ID=") {
-		t.Fatalf("submission named a tunnel it does not have:\n%s", submitted)
+	if strings.Contains(submitted, "CS_DEVTUNNEL_ID=") {
+		t.Fatalf("submission named a Dev Tunnel it does not have:\n%s", submitted)
 	}
 	if commands := string(mustRead(t, commandLog)); strings.Contains(commands, "TOKEN=") {
 		t.Fatalf("submission put a token on the command line:\n%s", commands)
 	}
 
-	service.TunnelCredentials = &testLinkBroker{}
+	service.DevtunnelCredentials = &testDevtunnelsAccounts{}
 	handler := serviceHandler(t, &service)
-	request.IdempotencyKey, request.TunnelModes = "request-two", []string{modeDevtunnel}
+	request.IdempotencyKey, request.TunnelModes = "request-two", []string{transportDevtunnel}
 	body, err := json.Marshal(request)
 	testutil.Check(t, err)
 	defined := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, "/api/v1/sessions", body))
 	var created SessionResponse
 	_ = json.Unmarshal(defined.Body.Bytes(), &created)
 	for path, body := range map[string][]byte{"/api/v1/sessions/validate": body, "/api/v1/sessions/" + created.ID + "/start": nil} {
-		if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, path, body)); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"tunnel_link_required"`) {
-			t.Fatalf("%s without a linked account = %d %s", path, response.Code, response.Body.String())
+		if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, path, body)); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"devtunnels_account_required"`) {
+			t.Fatalf("%s without a Dev Tunnels account = %d %s", path, response.Code, response.Body.String())
 		}
 	}
 }
 
 func TestServiceCloseWaitsForAStop(t *testing.T) {
 	service := testService(t)
-	manager := service.TunnelManager.(*testTunnelManager)
+	manager := service.DevtunnelManager.(*testDevtunnelManager)
 	manager.operationStarted, manager.operationBlock = make(chan struct{}), make(chan struct{})
 	session := pendingSession(sessionLogIDOne, "delta", "12345")
 	session.State = "READY"
 	session.Account = "project-a"
 	session.RootFolder = "projects/example"
-	session.WorkspaceRoot = "/home/tester/projects/example"
+	session.RootFolderPath = "/home/tester/projects/example"
 	session.PrivateRoot = "/home/tester/.cybershuttle/sessions/" + session.ID
 	putSessions(t, service, session)
 
@@ -360,7 +360,7 @@ func TestServiceCloseWaitsForAStop(t *testing.T) {
 	}
 }
 
-func TestDeleteRemovesATerminalSessionAndItsCredential(t *testing.T) {
+func TestDeleteClearsATerminalSessionAndItsCredential(t *testing.T) {
 	service := testService(t)
 	session := pendingSession(sessionLogIDOne, "delta", "12345")
 	setTestSessionMetadata(&session)
@@ -381,7 +381,7 @@ func TestDeleteRemovesATerminalSessionAndItsCredential(t *testing.T) {
 		}
 	}
 	if _, err := getCapability(service.CapabilityDir, session.ID, session.Seq); err == nil {
-		t.Fatal("delete left the seq capability on disk")
+		t.Fatal("delete left the run's capability on disk")
 	}
 	if _, ok := service.logs.tail(session.ID); ok {
 		t.Fatal("delete left the session log tail in memory")
@@ -394,7 +394,7 @@ func TestDeleteRemovesATerminalSessionAndItsCredential(t *testing.T) {
 func TestStopAndDeleteSurviveADevTunnelsReleaseFailure(t *testing.T) {
 	sshBin, _, _ := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
-	manager := configureTestTunnel(t, &service)
+	manager := configureTestDevtunnel(t, &service)
 	created, err := defineAndStart(context.Background(), service, newTestCreateRequest())
 	testutil.Check(t, err)
 	manager.deleteErr = errors.New("Dev Tunnels outage")
@@ -415,9 +415,9 @@ func TestStopAndDeleteSurviveADevTunnelsReleaseFailure(t *testing.T) {
 	}
 }
 
-func TestStartSerializesAcrossProcessesWithoutHoldingStoreLockDuringTunnelCreate(t *testing.T) {
+func TestStartSerializesAcrossProcessesWithoutHoldingStoreLockDuringDevtunnelCreate(t *testing.T) {
 	service := testService(t)
-	manager := service.TunnelManager.(*testTunnelManager)
+	manager := service.DevtunnelManager.(*testDevtunnelManager)
 	manager.operationStarted = make(chan struct{})
 	manager.operationBlock = make(chan struct{})
 	request := newTestCreateRequest()
@@ -439,11 +439,11 @@ func TestStartSerializesAcrossProcessesWithoutHoldingStoreLockDuringTunnelCreate
 	select {
 	case <-manager.operationStarted:
 	case <-time.After(time.Second):
-		t.Fatal("tunnel create was never reached")
+		t.Fatal("Dev Tunnel create was never reached")
 	}
 	lockAvailable := make(chan error, 1)
 	go func() { lockAvailable <- service.Store.locked(func(*state) error { return nil }) }()
-	testutil.Within(t, lockAvailable, 300*time.Millisecond, "state lock was held during blocked tunnel create")
+	testutil.Within(t, lockAvailable, 300*time.Millisecond, "state lock was held during blocked Dev Tunnel create")
 
 	close(manager.operationBlock)
 	testutil.Check(t, <-done)
@@ -459,19 +459,19 @@ var testPrincipal = security.Principal{Subject: "test-owner", Tenant: "test-tena
 
 var otherTestPrincipal = security.Principal{Subject: "other-owner", Tenant: "test-tenant"}
 
-type testLinkBroker struct {
-	mu    sync.Mutex
-	links map[security.Principal]devtunnel.Credential
+type testDevtunnelsAccounts struct {
+	mu       sync.Mutex
+	accounts map[security.Principal]devtunnel.Credential
 }
 
-func newTestLinkBroker() *testLinkBroker {
-	return &testLinkBroker{links: map[security.Principal]devtunnel.Credential{testPrincipal: {Scheme: "Bearer", Token: "test-tunnel-link-token"}}}
+func newTestDevtunnelsAccounts() *testDevtunnelsAccounts {
+	return &testDevtunnelsAccounts{accounts: map[security.Principal]devtunnel.Credential{testPrincipal: {Scheme: "Bearer", Token: "test-devtunnels-account-token"}}}
 }
 
-func (b *testLinkBroker) Credential(_ context.Context, principal security.Principal) (devtunnel.Credential, error) {
+func (b *testDevtunnelsAccounts) Credential(_ context.Context, principal security.Principal) (devtunnel.Credential, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.links[principal], nil
+	return b.accounts[principal], nil
 }
 
 func reconciledList(ctx context.Context, service Service) ([]Session, error) {
@@ -481,7 +481,7 @@ func reconciledList(ctx context.Context, service Service) ([]Session, error) {
 	return service.loadSessions()
 }
 
-type testTunnelManager struct {
+type testDevtunnelManager struct {
 	mu               sync.Mutex
 	creates          []devtunnel.CreateRequest
 	deletes          []devtunnel.DeleteRequest
@@ -491,7 +491,7 @@ type testTunnelManager struct {
 	operationBlock   chan struct{}
 }
 
-func (m *testTunnelManager) Create(_ context.Context, request devtunnel.CreateRequest) (devtunnel.Record, error) {
+func (m *testDevtunnelManager) Create(_ context.Context, request devtunnel.CreateRequest) (devtunnel.Record, error) {
 	if m.operationStarted != nil {
 		close(m.operationStarted)
 	}
@@ -507,11 +507,11 @@ func (m *testTunnelManager) Create(_ context.Context, request devtunnel.CreateRe
 	return devtunnel.Record{ID: request.TunnelID, ClusterID: "use", ConnectToken: testConnectToken, HostToken: testHostToken, ExpiresAt: time.Now().UTC().Add(time.Duration(request.DurationSeconds) * time.Second)}, nil
 }
 
-func (m *testTunnelManager) Get(context.Context, devtunnel.GetRequest) (devtunnel.Record, error) {
+func (m *testDevtunnelManager) Get(context.Context, devtunnel.GetRequest) (devtunnel.Record, error) {
 	return devtunnel.Record{}, nil
 }
 
-func (m *testTunnelManager) Delete(_ context.Context, request devtunnel.DeleteRequest) error {
+func (m *testDevtunnelManager) Delete(_ context.Context, request devtunnel.DeleteRequest) error {
 	if m.operationStarted != nil {
 		close(m.operationStarted)
 	}
@@ -528,12 +528,12 @@ type testRunnerProvider struct{ runner ssh.Runner }
 
 func (h testRunnerProvider) Runner(security.Principal) ssh.Runner { return h.runner }
 
-func configureTestTunnel(t *testing.T, service *Service) *testTunnelManager {
+func configureTestDevtunnel(t *testing.T, service *Service) *testDevtunnelManager {
 	t.Helper()
 	testutil.Check(t, security.EnsurePrivateDir(service.Store.Dir))
-	manager := &testTunnelManager{}
-	service.TunnelManager = manager
-	service.TunnelCredentials = newTestLinkBroker()
+	manager := &testDevtunnelManager{}
+	service.DevtunnelManager = manager
+	service.DevtunnelCredentials = newTestDevtunnelsAccounts()
 	service.CapabilityDir = t.TempDir() + "/session-capabilities"
 	return manager
 }
@@ -542,7 +542,7 @@ func setTestSessionMetadata(session *Session) {
 	if session.Seq == 0 {
 		session.Seq = 1
 		session.Owner = testPrincipal
-		session.Tunnel = tunnelMetadata{ID: session.ID + "-" + strconv.Itoa(session.Seq), ClusterID: "use", ExpiresAt: time.Now().Add(time.Hour)}
+		session.Devtunnel = devtunnelMetadata{ID: session.ID + "-" + strconv.Itoa(session.Seq), ClusterID: "use", ExpiresAt: time.Now().Add(time.Hour)}
 	}
 }
 
@@ -558,11 +558,11 @@ func putSessions(t *testing.T, service Service, sessions ...Session) {
 	}))
 }
 
-func pendingSession(id, host, jobID string) Session {
+func pendingSession(id, alias, jobID string) Session {
 	now := time.Unix(1, 0).UTC()
 	return Session{
-		SessionResponse: SessionResponse{ID: id, State: "QUEUED", SSHHost: host, Partition: "cpu", RootFolder: ".", Resources: Resources{Cores: 1, MemoryMB: 1024, WallMinutes: 60}, CreatedAt: now, UpdatedAt: now},
-		JobID:           jobID, JobName: jobName(id, 1), PrivateRoot: "/home/test/.cybershuttle/sessions/" + id, WorkspaceRoot: "/home/test", Owner: testPrincipal,
+		SessionResponse: SessionResponse{ID: id, State: "QUEUED", Alias: alias, Partition: "cpu", RootFolder: ".", Resources: Resources{Cores: 1, MemoryMB: 1024, WallMinutes: 60}, CreatedAt: now, UpdatedAt: now},
+		JobID:           jobID, JobName: jobName(id, 1), PrivateRoot: "/home/test/.cybershuttle/sessions/" + id, RootFolderPath: "/home/test", Owner: testPrincipal,
 	}
 }
 
@@ -702,7 +702,7 @@ func retire(t *testing.T, service Service, id string) Session {
 
 func TestStartRunsTheFinishedSessionOnTheSameSession(t *testing.T) {
 	service := testService(t)
-	tunnels := configureTestTunnel(t, &service)
+	devtunnels := configureTestDevtunnel(t, &service)
 	created, err := defineAndStart(context.Background(), service, newTestCreateRequest())
 	testutil.Check(t, err)
 	terminal := retire(t, service, created.ID)
@@ -710,13 +710,13 @@ func TestStartRunsTheFinishedSessionOnTheSameSession(t *testing.T) {
 	started, err := service.Start(context.Background(), testPrincipal, created.ID)
 	testutil.Check(t, err)
 	if started.State != "QUEUED" || started.Seq == terminal.Seq || started.Node != "" {
-		t.Fatalf("unexpected relaunched session: %#v", started)
+		t.Fatalf("unexpected next run: %#v", started)
 	}
 	if !started.CreatedAt.Equal(terminal.CreatedAt) || !started.UpdatedAt.After(terminal.UpdatedAt) {
-		t.Fatalf("relaunch must keep the session's creation time and move it forward: %#v", started.SessionResponse)
+		t.Fatalf("the next run must keep the session's creation time and move it forward: %#v", started.SessionResponse)
 	}
-	if len(tunnels.deletes) != 1 || tunnels.deletes[0].TunnelID != created.ID+"-"+strconv.Itoa(terminal.Seq) {
-		t.Fatalf("the finished run's tunnel was not released: %#v", tunnels.deletes)
+	if len(devtunnels.deletes) != 1 || devtunnels.deletes[0].TunnelID != created.ID+"-"+strconv.Itoa(terminal.Seq) {
+		t.Fatalf("the finished run's Dev Tunnel was not released: %#v", devtunnels.deletes)
 	}
 }
 
@@ -725,7 +725,7 @@ func TestStartRefusesSessionsItMayNotRun(t *testing.T) {
 	created, err := defineAndStart(context.Background(), service, newTestCreateRequest())
 	testutil.Check(t, err)
 	if _, err := service.Start(context.Background(), testPrincipal, created.ID); err == nil || security.For(err).Code != "session_running" {
-		t.Fatalf("a live session was run again: %v", err)
+		t.Fatalf("a live session was started again: %v", err)
 	}
 	retire(t, service, created.ID)
 
@@ -738,7 +738,7 @@ func TestStartRefusesSessionsItMayNotRun(t *testing.T) {
 	}
 }
 
-func restartRaceService(t *testing.T) (Service, *atomic.Int64, string, string) {
+func nextRunRaceService(t *testing.T) (Service, *atomic.Int64, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	started := filepath.Join(dir, "provision-started")
@@ -761,7 +761,7 @@ func TestPostIntentWorkOutlivesRequestAndStopsWithService(t *testing.T) {
 	t.Setenv("FAKE_SUBMIT_STARTED", submitStarted)
 	t.Setenv("FAKE_SUBMIT_RELEASE", filepath.Join(dir, "never-released"))
 	service := fakeSSHService(t, sshBin)
-	configureTestTunnel(t, &service)
+	configureTestDevtunnel(t, &service)
 	ctx, cancel := context.WithCancel(context.Background())
 	created := make(chan error, 1)
 	go func() { _, err := defineAndStart(ctx, service, newTestCreateRequest()); created <- err }()
@@ -781,8 +781,8 @@ func TestPostIntentWorkOutlivesRequestAndStopsWithService(t *testing.T) {
 	}
 }
 
-func TestRunAgainSurvivesAReconciliationAgainstTheFinishedRun(t *testing.T) {
-	service, clock, started, release := restartRaceService(t)
+func TestTheNextRunSurvivesAReconciliationAgainstTheFinishedRun(t *testing.T) {
+	service, clock, started, release := nextRunRaceService(t)
 	ctx := context.Background()
 	created, err := defineAndStart(ctx, service, newTestCreateRequest())
 	testutil.Check(t, err)
@@ -812,17 +812,17 @@ func TestRunAgainSurvivesAReconciliationAgainstTheFinishedRun(t *testing.T) {
 	during, err := service.loadSession(created.ID)
 	testutil.Check(t, err)
 	if during.State != "SUBMITTING" {
-		t.Fatalf("the finished run retired the relaunch: %s (job %q, node %q)", during.State, during.JobID, during.Node)
+		t.Fatalf("the finished run retired the next run: %s (job %q, node %q)", during.State, during.JobID, during.Node)
 	}
 	if during.JobID == finished.JobID || during.Node == finished.Node {
-		t.Fatalf("the relaunch adopted the finished run's job: %#v", during)
+		t.Fatalf("the next run adopted the finished run's job: %#v", during)
 	}
 
 	testutil.Check(t, os.WriteFile(release, nil, 0o600))
 	testutil.Check(t, <-errs)
-	relaunched := <-result
-	if relaunched.State != "QUEUED" || relaunched.JobID != "67890" {
-		t.Fatalf("the submitted relaunch was not queued: %#v (job %q)", relaunched.SessionResponse, relaunched.JobID)
+	next := <-result
+	if next.State != "QUEUED" || next.JobID != "67890" {
+		t.Fatalf("the submitted next run was not queued: %#v (job %q)", next.SessionResponse, next.JobID)
 	}
 }
 
@@ -834,17 +834,28 @@ func defineAndStart(ctx context.Context, service Service, request CreateRequest)
 	return service.Start(ctx, testPrincipal, session.ID)
 }
 
-func TestAttachAdmitsAClientLaunchedRunThatNeverReachesTheScheduler(t *testing.T) {
+type refusingCredentials struct{ t *testing.T }
+
+func (r refusingCredentials) Credential(context.Context, security.Principal) (devtunnel.Credential, error) {
+	r.t.Error("a link-only session read the Dev Tunnels credential")
+	return devtunnel.Credential{}, nil
+}
+
+func TestAttachAdmitsAClientLaunchedRunThatNeverReachesTheSchedulerOrDevTunnels(t *testing.T) {
 	sshBin, _, commandLog := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
-	manager := configureTestTunnel(t, &service)
+	manager := configureTestDevtunnel(t, &service)
+	service.DevtunnelCredentials = refusingCredentials{t}
 	session, _, err := service.Define(testPrincipal, newTestCreateRequest())
 	testutil.Check(t, err)
-	response := testutil.Serve(serviceHandler(t, &service), requestAs(testPrincipal, http.MethodPost, "/api/v1/sessions/"+session.ID+"/attach", []byte(`{"tunnelModes":["websocket"]}`)))
+	response := testutil.Serve(serviceHandler(t, &service), requestAs(testPrincipal, http.MethodPost, "/api/v1/sessions/"+session.ID+"/attach", []byte(`{"tunnelModes":["link"]}`)))
 	var attached AttachResponse
 	_ = json.Unmarshal(response.Body.Bytes(), &attached)
-	if response.Code != http.StatusOK || attached.Session.State != "QUEUED" || attached.Session.Launcher != launcherClient || attached.Session.Seq != 1 || attached.Link == nil || attached.Devtunnel != nil || !slices.Equal(attached.Session.TunnelModes, []string{modeWebsocket}) {
-		t.Fatalf("attach = %d %#v", response.Code, attached.Session)
+	if response.Code != http.StatusOK || attached.Session.State != "QUEUED" || attached.Session.Platform != platformVSCode || attached.Session.Seq != 1 || attached.Link == nil || attached.Devtunnel != nil || !slices.Equal(attached.Session.TunnelModes, []string{transportLink}) || attached.Port != ports(session.ID, 1).Control {
+		t.Fatalf("attach = %d %#v, port %d", response.Code, attached.Session, attached.Port)
+	}
+	if _, err := service.dial(context.Background(), Session{SessionResponse: attached.Session}, 1); !errors.Is(err, errNoRoute) {
+		t.Fatalf("a session with no link and no Dev Tunnel dialed something: %v", err)
 	}
 	capability, err := getCapability(service.CapabilityDir, session.ID, 1)
 	if err != nil || attached.Link.Token != capability.LinkToken || attached.Link.URL != "wss://plane.example.edu/api/v1/sessions/"+session.ID+"/link" {
@@ -866,7 +877,7 @@ func TestAttachAdmitsAClientLaunchedRunThatNeverReachesTheScheduler(t *testing.T
 		t.Fatalf("stop = %#v %v", stopped, err)
 	}
 	runs, err := service.Runs(testPrincipal)
-	if err != nil || len(runs) != 1 || runs[0].Seq != 1 || runs[0].FinalState != "STOPPED" || !slices.Equal(runs[0].TunnelModes, []string{modeWebsocket}) {
+	if err != nil || len(runs) != 1 || runs[0].Seq != 1 || runs[0].Platform != platformVSCode || runs[0].FinalState != "STOPPED" || !slices.Equal(runs[0].TunnelModes, []string{transportLink}) {
 		t.Fatalf("stop did not freeze the run: %#v %v", runs, err)
 	}
 	if _, err := os.Stat(commandLog); !errors.Is(err, os.ErrNotExist) {

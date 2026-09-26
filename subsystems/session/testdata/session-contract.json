@@ -2,8 +2,8 @@
   "id": "s-012345abcdef",
   "seq": 1,
   "state": "READY",
-  "launcher": "cs-plane",
-  "sshHost": "delta",
+  "platform": "jupyterlab",
+  "alias": "delta",
   "account": "project-a",
   "partition": "cpu",
   "rootFolder": "$HOME/project",
@@ -13,7 +13,7 @@
     "wallMinutes": 60
   },
   "tunnelModes": [
-    "websocket"
+    "link"
   ],
   "createdAt": "2030-01-01T00:00:00Z",
   "startedAt": "2030-01-01T00:00:30Z",

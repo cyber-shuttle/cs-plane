@@ -21,10 +21,10 @@ import (
 	"github.com/cyber-shuttle/cs-plane/internal/security"
 	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 	"github.com/cyber-shuttle/cs-plane/internal/testutil"
+	"github.com/cyber-shuttle/cs-plane/subsystems/devtunnels"
 	"github.com/cyber-shuttle/cs-plane/subsystems/oauth"
 	"github.com/cyber-shuttle/cs-plane/subsystems/session"
 	sshapi "github.com/cyber-shuttle/cs-plane/subsystems/ssh"
-	"github.com/cyber-shuttle/cs-plane/subsystems/tunnel"
 )
 
 func testServices(t *testing.T, stateDir string) services {
@@ -83,7 +83,7 @@ func TestServeRefusesIncompatibleStateBeforeCreatingCredentials(t *testing.T) {
 	if err := runServe(context.Background(), svcs, args, listen); err == nil {
 		t.Fatal("an incompatible state database was accepted")
 	}
-	if _, statErr := os.Stat(filepath.Join(stateDir, "tunnel-link.key")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(stateDir, "devtunnels-account.key")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("startup refusal created a credential key: %v", statErr)
 	}
 }
@@ -118,7 +118,7 @@ func TestCanonicalRouteManifest(t *testing.T) {
 		(&oauth.Service{}).Routes(),
 		(sshapi.Service{}).Routes(),
 		(session.Service{}).Routes(),
-		(&tunnel.Service{}).Routes(),
+		(&devtunnels.Service{}).Routes(),
 	}
 	if _, err := router.New(groups...); err != nil {
 		t.Fatal(err)
@@ -130,32 +130,31 @@ func TestCanonicalRouteManifest(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"/api/v1/oauth/config":                        "GET",
-		"/api/v1/oauth/exchange":                      "POST",
-		"/api/v1/oauth/refresh":                       "POST",
-		"/api/v1/oauth/device":                        "POST",
-		"/api/v1/oauth/device/poll":                   "POST",
-		"/api/v1/hosts":                               "GET POST",
-		"/api/v1/hosts/{alias}":                       "DELETE PUT",
-		"/api/v1/hosts/{alias}/health":                "GET",
-		"/api/v1/hosts/{alias}/slurm":                 "GET",
-		"/api/v1/hosts/{alias}/ssh":                   "GET",
-		"/api/v1/keys/ssh":                            "GET POST",
-		"/api/v1/keys/ssh/{id}":                       "DELETE",
-		"/api/v1/tunnel":                              "DELETE GET",
-		"/api/v1/tunnel/authorizations":               "POST",
-		"/api/v1/tunnel/authorizations/{handle}/poll": "POST",
-		"/api/v1/sessions":                            "GET POST",
-		"/api/v1/sessions/validate":                   "POST",
-		"/api/v1/sessions/{id}/ssh":                   "POST",
-		"/api/v1/sessions/{id}":                       "DELETE GET",
-		"/api/v1/sessions/{id}/start":                 "POST",
-		"/api/v1/sessions/{id}/attach":                "POST",
-		"/api/v1/sessions/{id}/stop":                  "POST",
-		"/api/v1/sessions/{id}/runs":                  "POST",
-		"/api/v1/sessions/{id}/access":                "GET",
-		"/api/v1/sessions/{id}/metrics":               "GET",
-		"/api/v1/telemetry":                           "GET",
+		"/api/v1/oauth/config":                            "GET",
+		"/api/v1/oauth/exchange":                          "POST",
+		"/api/v1/oauth/refresh":                           "POST",
+		"/api/v1/oauth/device":                            "POST",
+		"/api/v1/oauth/device/poll":                       "POST",
+		"/api/v1/hosts":                                   "GET POST",
+		"/api/v1/hosts/{alias}":                           "DELETE PUT",
+		"/api/v1/hosts/{alias}/health":                    "GET",
+		"/api/v1/hosts/{alias}/slurm":                     "GET",
+		"/api/v1/hosts/{alias}/ssh":                       "GET",
+		"/api/v1/keys/ssh":                                "GET POST",
+		"/api/v1/keys/ssh/{id}":                           "DELETE",
+		"/api/v1/devtunnels":                              "DELETE GET",
+		"/api/v1/devtunnels/authorizations":               "POST",
+		"/api/v1/devtunnels/authorizations/{handle}/poll": "POST",
+		"/api/v1/sessions":                                "GET POST",
+		"/api/v1/sessions/validate":                       "POST",
+		"/api/v1/sessions/{id}/ssh":                       "POST",
+		"/api/v1/sessions/{id}":                           "DELETE GET",
+		"/api/v1/sessions/{id}/start":                     "POST",
+		"/api/v1/sessions/{id}/attach":                    "POST",
+		"/api/v1/sessions/{id}/stop":                      "POST",
+		"/api/v1/sessions/{id}/access":                    "GET",
+		"/api/v1/sessions/{id}/usage":                     "GET",
+		"/api/v1/runs":                                    "GET",
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("route manifest = %v, want %v", got, want)

@@ -22,8 +22,8 @@ func reconciliationService(t *testing.T) (Service, string, string) {
 	return service, os.Getenv("FAKE_COMMAND_LOG"), filepath.Join(service.Store.Dir, "release")
 }
 
-func stoppingSession(id, host, jobID string) Session {
-	session := pendingSession(id, host, jobID)
+func stoppingSession(id, alias, jobID string) Session {
+	session := pendingSession(id, alias, jobID)
 	session.State = "STOPPING"
 	return session
 }
@@ -35,11 +35,11 @@ func mustRead(t *testing.T, path string) []byte {
 	return data
 }
 
-func assertOneSchedulerRound(t *testing.T, log, host string) {
+func assertOneSchedulerRound(t *testing.T, log, alias string) {
 	t.Helper()
 	data := string(mustRead(t, log))
-	if strings.Count(data, host+"|'sh' '-s' '--' 'cs-session-status'") != 1 {
-		t.Fatalf("scheduler calls were not one round for %s: %s", host, data)
+	if strings.Count(data, alias+"|'sh' '-s' '--' 'cs-session-status'") != 1 {
+		t.Fatalf("scheduler calls were not one round for %s: %s", alias, data)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestWalltimeExpiryWithNoObservationDeletesTheCredential(t *testing.T) {
 	t.Setenv("FAKE_STATUS_FAIL", "1")
 	testutil.Check(t, service.reconcileAll(context.Background()))
 	if _, err := getCapability(service.CapabilityDir, session.ID, session.Seq); err == nil {
-		t.Fatal("a session retired past its walltime with no observation kept its seq capability")
+		t.Fatal("a session retired past its walltime with no observation kept its run's capability")
 	}
 }
 
@@ -227,7 +227,7 @@ func TestRunningSessionStaysStartingUntilItsTailHasContent(t *testing.T) {
 	}
 }
 
-func TestStaleReconciliationRoundDoesNotNarrateARestartedSession(t *testing.T) {
+func TestStaleReconciliationRoundDoesNotNarrateASessionStartedAgain(t *testing.T) {
 	service, commandLog, release := reconciliationService(t)
 	t.Setenv("FAKE_STATUS_RELEASE", release)
 	session := pendingSession("s-111111111111", "alpha", "101")
@@ -240,13 +240,13 @@ func TestStaleReconciliationRoundDoesNotNarrateARestartedSession(t *testing.T) {
 	testutil.WaitForFile(t, commandLog)
 
 	service.logs.forget(session.ID)
-	relaunched := session
-	relaunched.State, relaunched.JobID, relaunched.UpdatedAt = "SUBMITTING", "", time.Now().UTC()
-	putSessions(t, service, relaunched)
+	next := session
+	next.State, next.JobID, next.UpdatedAt = "SUBMITTING", "", time.Now().UTC()
+	putSessions(t, service, next)
 
 	testutil.Check(t, os.WriteFile(release, []byte("ok"), 0o600))
 	testutil.Check(t, <-done)
 	if tail, ok := service.logs.tail(session.ID); ok {
-		t.Fatalf("a superseded round narrated the relaunched session: %#v", tail.Lines)
+		t.Fatalf("a superseded round narrated the session started again: %#v", tail.Lines)
 	}
 }

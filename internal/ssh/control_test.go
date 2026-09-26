@@ -160,7 +160,7 @@ func bindTestUnixSocket(path string) error {
 	return os.Chmod(path, 0o600)
 }
 
-func TestSSHAuthWebSocketPromptReuseSingleFlightAndCleanup(t *testing.T) {
+func TestSSHAuthWebSocketPromptShareSingleFlightAndCleanup(t *testing.T) {
 	service := newAuthTestService(t)
 	t.Setenv("AUTH_HELPER_REMOTE_NOISE", "1")
 	logPath := os.Getenv("AUTH_HELPER_LOG")
@@ -233,7 +233,7 @@ func TestSSHAuthWebSocketPromptReuseSingleFlightAndCleanup(t *testing.T) {
 		t.Fatalf("missing ready/output/resize evidence: ready=%v output=%q", ready, output.String())
 	}
 	if strings.Contains(output.String(), "MOTD") || strings.Contains(output.String(), "Lmod") {
-		t.Fatalf("remote login noise reached authentication output: %q", output.String())
+		t.Fatalf("remote SSH banner noise reached authentication output: %q", output.String())
 	}
 
 	_, err = service.Run(context.Background(), "delta", nil, "true")
@@ -241,7 +241,7 @@ func TestSSHAuthWebSocketPromptReuseSingleFlightAndCleanup(t *testing.T) {
 	logData, err := os.ReadFile(logPath)
 	testutil.Check(t, err)
 	if !strings.Contains(string(logData), "BATCH_REUSED") {
-		t.Fatalf("batch operations did not reuse control path: %s", logData)
+		t.Fatalf("non-interactive operations did not share the control path: %s", logData)
 	}
 	if strings.Contains(string(logData), strings.TrimSpace(string(secret))) {
 		t.Fatal("interactive credential leaked into logs")
@@ -457,7 +457,7 @@ func TestControlPathChangesForEveryEffectiveConfigurationSource(t *testing.T) {
 	concrete, err := service.resolvedControlPath(context.Background(), "delta")
 	testutil.Check(t, err)
 	if before == concrete {
-		t.Fatal("concrete alias retarget reused its old ControlPath")
+		t.Fatal("concrete alias retarget kept its old ControlPath")
 	}
 
 	paths := strings.Split(os.Getenv("AUTH_HELPER_EFFECTIVE_FILES"), string(os.PathListSeparator))
@@ -468,7 +468,7 @@ func TestControlPathChangesForEveryEffectiveConfigurationSource(t *testing.T) {
 	outsideStanza, err := service.resolvedControlPath(context.Background(), "delta")
 	testutil.Check(t, err)
 	if concrete == outsideStanza {
-		t.Fatal("a wildcard change outside the alias's own stanza reused ControlPath")
+		t.Fatal("a wildcard change outside the alias's own stanza kept the ControlPath")
 	}
 }
 
@@ -595,7 +595,7 @@ func TestConcurrentManagersSerializeControlPathStartup(t *testing.T) {
 	select {
 	case got := <-second:
 		if got.err != nil || !got.healthy || got.lock != nil {
-			t.Fatalf("second manager did not reuse without ownership: %#v", got)
+			t.Fatalf("second manager did not share the master without ownership: %#v", got)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("second manager did not observe the healthy master")

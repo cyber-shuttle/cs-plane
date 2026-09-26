@@ -62,7 +62,7 @@ func TestOAuthBoundaryExactOriginsBearerAndNative(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, err := security.PrincipalFromContext(r.Context())
 		if err != nil || principal != (security.Principal{Subject: "owner", Tenant: "tenant"}) {
-			t.Fatalf("tunnel authorization = %#v, %v", principal, err)
+			t.Fatalf("delegated authorization = %#v, %v", principal, err)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

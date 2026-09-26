@@ -28,7 +28,7 @@ linters:
         text: "G306"
       # ST1005 flags the capital letter in a proper noun, not a sentence-case violation: Linkspan and Dev
       # Tunnel are names, not the start of a generic error sentence.
-      - path: subsystems/session/tunnel\.go
+      - path: subsystems/session/devtunnel\.go
         linters: [staticcheck]
         text: "ST1005"
       - path: internal/devtunnel/devtunnel\.go
@@ -41,7 +41,7 @@ linters:
       # These are OAuth endpoint URLs, not literal credentials; the constant name says what it is reached
       # for, not a secret it holds (G101). The struct is JSON-marshaled only to be sealed with secretbox in
       # the same call, never written or logged in the clear (G117).
-      - path: subsystems/tunnel/tunnel\.go
+      - path: subsystems/devtunnels/devtunnels\.go
         linters: [gosec]
         text: "G101|G117"
       # Chmods and opens a path this process already verified with PrivateDir/EnsurePrivateDir; the directory
@@ -62,7 +62,7 @@ linters:
         text: "G118"
       # GuardedClient follows only same-origin redirects, so the Authorization header Go preserves across
       # the hop stays on the origin that issued it (G119). Every request URL was validated by its caller
-      # against a fixed identity or tunnel service endpoint, not taken fresh from user input (G704).
+      # against a fixed identity or Dev Tunnels service endpoint, not taken fresh from user input (G704).
       - path: internal/security/client\.go
         linters: [gosec]
         text: "G119|G704"
