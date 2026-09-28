@@ -5,7 +5,7 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
-The next release is 0.4.0.
+## [0.4.0] - 2026-09-28
 
 Upgrading from 0.3.0: callers are now identified by their CILogon identity, and nothing stored under the old
 principals is migrated. Stop every session first. With cs-plane stopped, run against its schema (here `cs_plane`):
@@ -100,5 +100,6 @@ Each user re-adds their SSH hosts, SSH keys and Dev Tunnels account.
 - `GET /telemetry`: finished runs per seq with Slurm accounting.
 - State in a Postgres schema named by `CS_DATABASE_URL`, with sqlc-generated queries.
 
-[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.4.0
 [0.3.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.3.0
