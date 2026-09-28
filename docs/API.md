@@ -52,9 +52,8 @@ Authorization: Bearer <OIDC ID token>
 ```
 
 The token is validated against the issuer's discovery document and JWKS, with exact issuer and the audience pinned to
-the client ID. The principal is the user id Custos returns for `GET {custos-url}/me` with the same bearer, under
-tenant `custos`, cached five minutes per token. A token Custos answers `401` for is `401 identity_not_linked`; any
-other failure is `401 unauthorized` with `WWW-Authenticate: Bearer`.
+the client ID. The principal is the token's `sub` under tenant `cilogon`. Any failure is `401 unauthorized` with
+`WWW-Authenticate: Bearer`.
 
 The SSH authentication WebSocket carries the credential as exactly two subprotocols, in any order, and negotiates
 `cybershuttle.v1`:
@@ -92,7 +91,7 @@ detail logged, not returned.
 | Code | Status |
 | --- | --- |
 | `invalid_json`, `invalid_websocket_auth`, `invalid_ssh_alias`, `invalid_ssh_command`, `invalid_ssh_key_id`, `invalid_ssh_key`, `invalid_root_folder`, `invalid_partition`, `invalid_account`, `invalid_gpu`, `invalid_resource`, `invalid_resources`, `invalid_idempotency_key`, `invalid_session_id`, `invalid_tunnel_modes`, `slurm_validation_failed`, `invalid_grant`, `unknown_provider` | 400 |
-| `unauthorized`, `identity_not_linked` | 401 |
+| `unauthorized` | 401 |
 | `session_owner_mismatch`, `origin_required`, `origin_not_allowed`, `preflight_not_allowed`, `authorization_denied` | 403 |
 | `not_found`, `session_not_found`, `ssh_host_not_found`, `ssh_key_not_found` | 404 |
 | `method_not_allowed` | 405 |

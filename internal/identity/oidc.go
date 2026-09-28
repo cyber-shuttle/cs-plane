@@ -1,7 +1,7 @@
-// Package identity implements the OIDC and Custos protocol clients used to establish a caller's identity.
+// Package identity implements the OIDC protocol client that establishes a caller's identity from a CILogon ID token.
 // OIDC discovery and JWKS share one cache; only an unknown key inside its cooldown triggers refresh. Token grants
-// use the discovered endpoint and expose classified protocol outcomes without HTTP policy. Callers compose these
-// clients into principals and public routes.
+// use the discovered endpoint and expose classified protocol outcomes without HTTP policy. Callers compose this
+// client into principals and public routes.
 package identity
 
 import (
@@ -38,8 +38,6 @@ var (
 	ErrGrantRejected        = errors.New("OIDC grant was rejected")
 	ErrTokenUnavailable     = errors.New("OIDC token service is unavailable")
 	ErrTokenInvalid         = errors.New("OIDC token response is invalid")
-	ErrIdentityNotLinked    = errors.New("OIDC identity is not linked to a Custos user")
-	ErrIdentityUnrecognized = errors.New("Custos did not recognize this identity")
 )
 
 type Metadata struct {
@@ -141,31 +139,35 @@ func parseSignedIDToken(token string) (idTokenHeader, idTokenClaims, string, []b
 	return header, claims, parts[0] + "." + parts[1], signature, nil
 }
 
-func (v *OIDC) Validate(ctx context.Context, token string) error {
+// Validate verifies the ID token and answers its subject.
+func (v *OIDC) Validate(ctx context.Context, token string) (string, error) {
 	header, claims, signingInput, signature, err := parseSignedIDToken(token)
 	if err != nil {
-		return errors.New("ID token is invalid")
+		return "", errors.New("ID token is invalid")
 	}
 	cache, err := v.keys(ctx, "")
 	if err != nil {
-		return err
+		return "", err
 	}
 	key := cache.keys[header.Kid]
 	if key == nil {
 		cache, err = v.keys(ctx, header.Kid)
 		if err != nil {
-			return err
+			return "", err
 		}
 		key = cache.keys[header.Kid]
 		if key == nil {
-			return errors.New("ID token signing key is unknown")
+			return "", errors.New("ID token signing key is unknown")
 		}
 	}
 	digest := sha256.Sum256([]byte(signingInput))
 	if rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature) != nil {
-		return errors.New("ID token signature is invalid")
+		return "", errors.New("ID token signature is invalid")
 	}
-	return v.validateClaims(claims, cache.metadata.Issuer)
+	if err := v.validateClaims(claims, cache.metadata.Issuer); err != nil {
+		return "", err
+	}
+	return claims.Subject, nil
 }
 
 func (v *OIDC) validateClaims(claims idTokenClaims, configuredIssuer string) error {

@@ -4,13 +4,12 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/cyber-shuttle/cs-plane)](go.mod)
 [![License](https://img.shields.io/github/license/cyber-shuttle/cs-plane?color=blue)](LICENSE)
 
-CyberShuttle is the ARTISAN group's toolset for running Jupyter and VS Code sessions on the
-compute nodes of HPC (high-performance computing) clusters, reachable from a browser or editor. cs-plane is
-its central service. It signs users in through CILogon and resolves each to a user in
-[Custos](https://custos.cyberinfrastructure.org/); it holds each user's credentials, SSH hosts and session
-records; and it submits the [Linkspan](https://github.com/cyber-shuttle/linkspan) job that runs a session
-through [Slurm](https://slurm.schedmd.com/), preparing the SSH host first. The job's Linkspan dials out to cs-plane and
-holds a link, so a session is reachable without the cluster opening an inbound port.
+CyberShuttle is the ARTISAN group's toolset for running Jupyter and VS Code sessions on the compute nodes of HPC
+(high-performance computing) clusters, reachable from a browser or editor. cs-plane is its central service. It signs
+users in through CILogon; it holds each user's credentials, SSH hosts and session records; and it submits the
+[Linkspan](https://github.com/cyber-shuttle/linkspan) job that runs a session through
+[Slurm](https://slurm.schedmd.com/), preparing the SSH host first. The job's Linkspan dials out to cs-plane and holds a
+link, so a session is reachable without the cluster opening an inbound port.
 
 A session is the record a client defines, starts and polls; a Slurm job serves each run, and one session can
 outlive several. Each user's work runs as that user: their own SSH host configuration, their SSH keys, their
@@ -35,9 +34,6 @@ The `/api/v1` surface is not yet stable. [CHANGELOG.md](CHANGELOG.md) records wh
 - **A Postgres server** with a schema cs-plane owns. `CS_DATABASE_URL` names it through `search_path`, for
   example `postgres:///cybershuttle?host=/var/run/postgresql&search_path=cs_plane`; cs-plane creates its tables in that
   schema while it is empty, and refuses one it did not create.
-- **A [Custos](https://custos.cyberinfrastructure.org/) instance** the resolved identity is checked against:
-  `--custos-url` names it, and cs-plane calls `GET {custos-url}/me` with the caller's bearer to resolve the
-  principal.
 - **Optionally, a Microsoft or GitHub account entitled to
   [Dev Tunnels](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview),** connected once through
   `POST /api/v1/devtunnels/authorizations` and kept sealed under the caller's principal, for a Dev Tunnel made
@@ -52,7 +48,7 @@ The `/api/v1` surface is not yet stable. [CHANGELOG.md](CHANGELOG.md) records wh
   packages from, and, with a Dev Tunnel, to `tunnelsassetsprod.blob.core.windows.net`, which Linkspan fetches
   Microsoft's `devtunnel` CLI from, and to
   `*.rel.tunnels.api.visualstudio.com` and `*.devtunnels.ms`, which it hosts the Dev Tunnel through; and from
-  the machine running cs-plane to the configured OIDC issuer, the configured Custos URL, `*.rel.tunnels.api.visualstudio.com`
+  the machine running cs-plane to the configured OIDC issuer, `*.rel.tunnels.api.visualstudio.com`
   and `*.devtunnels.ms`, plus `login.microsoftonline.com` or `github.com` while connecting a Dev Tunnels account. See
   [what it runs on the cluster](#what-it-runs-on-the-cluster).
 
@@ -72,17 +68,15 @@ export CS_DATABASE_URL='postgres:///cybershuttle?host=/var/run/postgresql&search
 cs serve \
   --listen 127.0.0.1:8045 \
   --oidc-client-id cilogon:/client_id/<id> \
-  --custos-url https://custos.cybershuttle.org \
   --public-url https://api.example.edu \
   --allowed-origin https://workspace.example.edu
 ```
 
-`--oidc-client-id`, `--custos-url`, `--public-url`, `CS_OIDC_CLIENT_SECRET` and `CS_DATABASE_URL` are required;
-`--oidc-issuer` defaults to `https://cilogon.org`. The issuer must use HTTPS and match its discovery document
-exactly; the Custos URL must use HTTPS or loopback HTTP; the public URL, where browsers and jobs reach cs-plane,
-must use HTTPS.
-`--allowed-origin` is repeatable and at least one is required; HTTPS origins and loopback HTTP origins are
-accepted, wildcards are not. `--listen` defaults to `127.0.0.1:8045` and must be an explicit loopback address.
+`--oidc-client-id`, `--public-url`, `CS_OIDC_CLIENT_SECRET` and `CS_DATABASE_URL` are required; `--oidc-issuer` defaults
+to `https://cilogon.org`. The issuer must use HTTPS and match its discovery document exactly; the public URL, where
+browsers and jobs reach cs-plane, must use HTTPS. `--allowed-origin` is repeatable and at least one is required; HTTPS
+origins and loopback HTTP origins are accepted, wildcards are not. `--listen` defaults to `127.0.0.1:8045` and must be
+an explicit loopback address.
 
 There are no CLI commands for SSH keys, SSH hosts, or sessions — a client drives cs-plane over the API. Its routes are
 under `/api/v1/oauth`, `/api/v1/hosts`, `/api/v1/keys`, `/api/v1/devtunnels`, `/api/v1/sessions`, and
@@ -102,7 +96,6 @@ HTTP/1.1 401 Unauthorized
 | `serve --listen` | — | `127.0.0.1:8045` |
 | `serve --oidc-issuer` | — | `https://cilogon.org` |
 | `serve --oidc-client-id` | — | required |
-| `serve --custos-url` | — | required |
 | `serve --public-url` | — | required |
 | — | `CS_OIDC_CLIENT_SECRET` | required |
 | `serve --allowed-origin` (repeatable) | — | required |

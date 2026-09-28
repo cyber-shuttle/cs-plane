@@ -20,7 +20,6 @@ const signInScope = "openid email profile offline_access"
 
 type Service struct {
 	oidc         *identity.OIDC
-	custos       *identity.Custos
 	clientID     string
 	clientSecret string
 	origins      security.Origins
@@ -118,7 +117,7 @@ func (s *Service) handleDevicePoll(writer http.ResponseWriter, request *http.Req
 	}
 }
 
-func NewService(custosURL, issuer, clientID, clientSecret string, origins security.Origins, client *http.Client) (*Service, error) {
+func NewService(issuer, clientID, clientSecret string, origins security.Origins, client *http.Client) (*Service, error) {
 	if strings.TrimSpace(clientSecret) == "" || len(origins) == 0 {
 		return nil, errors.New("auth service dependencies are required")
 	}
@@ -126,11 +125,7 @@ func NewService(custosURL, issuer, clientID, clientSecret string, origins securi
 	if err != nil {
 		return nil, err
 	}
-	custos, err := identity.NewCustos(custosURL, client)
-	if err != nil {
-		return nil, err
-	}
-	service := &Service{oidc: oidc, custos: custos, clientID: clientID, clientSecret: clientSecret, origins: origins}
+	service := &Service{oidc: oidc, clientID: clientID, clientSecret: clientSecret, origins: origins}
 	service.validator = service.validate
 	return service, nil
 }
