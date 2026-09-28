@@ -1,5 +1,5 @@
-// Session preparation validates public requests against discovered Slurm resources and resolves the workspace.
-// It builds the Linkspan workflow and batch script, then performs bounded provisioning and submission operations.
+// Session preparation validates public requests against discovered Slurm resources and resolves the root folder.
+// It builds the Linkspan workflow and job script, then performs bounded provisioning and submission operations.
 // Validate narrates into a throwaway log so a dry run never writes into a session's visible log tail.
 // Slurm framing and parsing live in internal/slurm; session policy and API error mapping remain here.
 // Secrets are composed only at the final submission boundary.
@@ -37,14 +37,14 @@ func (s Service) Validate(ctx context.Context, principal security.Principal, req
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.tunnelCredential(ctx, principal, request.TunnelModes); err != nil {
+	if _, err := s.devtunnelCredential(ctx, principal, request.TunnelModes); err != nil {
 		return nil, err
 	}
 	prepared, err := s.prepareSession(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	result, err := slurm.Check(ctx, s.runner, prepared.session.SSHHost, prepared.script)
+	result, err := slurm.Check(ctx, s.runner, prepared.session.Alias, prepared.script)
 	if err != nil {
 		return nil, err
 	}
@@ -96,12 +96,12 @@ func resolveRemoteExecutable(value, home string) string {
 	return pathpkg.Join(home, rest)
 }
 
-func safeWorkspaceSuffix(value string) bool {
+func safeRootFolderSuffix(value string) bool {
 	if value == "" || pathpkg.Clean(value) != value || strings.HasPrefix(value, "/") {
 		return false
 	}
 	for _, part := range strings.Split(value, "/") {
-		if part == "" || part == "." || part == ".." || !workspaceSegment.MatchString(part) {
+		if part == "" || part == "." || part == ".." || !rootFolderSegment.MatchString(part) {
 			return false
 		}
 	}
@@ -111,7 +111,7 @@ func safeWorkspaceSuffix(value string) bool {
 func validatePartitionResources(values []Partition, name string, resources Resources) error {
 	matches := slices.DeleteFunc(slices.Clone(values), func(p Partition) bool { return p.Name != name })
 	if len(matches) == 0 {
-		return security.New("invalid_partition", "Slurm partition was not discovered for this host", http.StatusBadRequest)
+		return security.New("invalid_partition", "Slurm partition was not discovered for this SSH host", http.StatusBadRequest)
 	}
 	fits := func(p Partition) bool { return resourcesFit(resources, p) }
 	gpuRequested := resources.GPUCount != 0 || resources.GPUType != ""
@@ -149,7 +149,7 @@ func safeRemoteExecutable(value string) bool {
 	return safeRemotePath(value) && strings.HasPrefix(value, "/")
 }
 
-func validWorkspaceExpression(value string) bool {
+func validRootFolderExpression(value string) bool {
 	if value == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\\\x00\r\n") {
 		return false
 	}
@@ -160,27 +160,27 @@ func validWorkspaceExpression(value string) bool {
 		return safeRemotePath(value)
 	}
 	if strings.HasPrefix(value, "~/") {
-		return safeWorkspaceSuffix(strings.TrimPrefix(value, "~/"))
+		return safeRootFolderSuffix(strings.TrimPrefix(value, "~/"))
 	}
-	if match := workspaceVar.FindStringSubmatch(value); match != nil {
-		return !strings.HasSuffix(value, "/") && len(cmp.Or(match[1], match[2])) <= 64 && (match[3] == "" || safeWorkspaceSuffix(match[3]))
+	if match := rootFolderVar.FindStringSubmatch(value); match != nil {
+		return !strings.HasSuffix(value, "/") && len(cmp.Or(match[1], match[2])) <= 64 && (match[3] == "" || safeRootFolderSuffix(match[3]))
 	}
-	return safeWorkspaceSuffix(value)
+	return safeRootFolderSuffix(value)
 }
 
-func canonicalTunnelModes(modes []string) ([]string, error) {
-	modes = slices.Sorted(slices.Values(modes))
-	if len(modes) == 0 || len(slices.Compact(slices.Clone(modes))) != len(modes) || slices.ContainsFunc(modes, func(mode string) bool { return linkspanModeArgs[mode] == "" }) {
-		return nil, security.New("invalid_tunnel_modes", "tunnelModes must be distinct values from websocket and devtunnel", http.StatusBadRequest)
+func canonicalTunnelModes(transports []string) ([]string, error) {
+	transports = slices.Sorted(slices.Values(transports))
+	if len(transports) == 0 || len(slices.Compact(slices.Clone(transports))) != len(transports) || slices.ContainsFunc(transports, func(transport string) bool { return linkspanTransportFlags[transport] == "" }) {
+		return nil, security.New("invalid_tunnel_modes", "tunnelModes must be distinct values from link and devtunnel", http.StatusBadRequest)
 	}
-	return modes, nil
+	return transports, nil
 }
 
 func validateCreate(request *CreateRequest) (err error) {
 	if request.ID == "" && request.IdempotencyKey == "" {
 		return security.New("invalid_idempotency_key", "idempotencyKey is required", http.StatusBadRequest)
 	}
-	if !ssh.ValidAlias(request.SSHHost) {
+	if !ssh.ValidAlias(request.Alias) {
 		return ssh.ErrInvalidAlias
 	}
 	if !security.SafeName(request.Partition, 64) {
@@ -189,7 +189,7 @@ func validateCreate(request *CreateRequest) (err error) {
 	if request.Account != "" && !security.SafeName(request.Account, 64) {
 		return security.New("invalid_account", "invalid account", http.StatusBadRequest)
 	}
-	if !validWorkspaceExpression(request.RootFolder) {
+	if !validRootFolderExpression(request.RootFolder) {
 		return invalidRootFolder("rootFolder must be a safe POSIX path: absolute, relative to the home, or under $HOME or $VAR")
 	}
 	if request.Resources.Cores < minCores || request.Resources.Cores > 4096 {
@@ -205,24 +205,24 @@ func validateCreate(request *CreateRequest) (err error) {
 		return security.New("invalid_idempotency_key", "invalid idempotency key", http.StatusBadRequest)
 	}
 	if request.TunnelModes == nil {
-		request.TunnelModes = []string{modeWebsocket}
+		request.TunnelModes = []string{transportLink}
 	}
 	request.TunnelModes, err = canonicalTunnelModes(request.TunnelModes)
 	return err
 }
 
-func validateWorkspacePrivateLayout(home, workspace, privateRoot, sessionID, expression string) error {
-	if workspace == privateRoot || strings.HasPrefix(workspace, privateRoot+"/") {
-		return invalidRootFolder("workspace resolves inside the private session directory")
+func validateRootFolderPrivateLayout(home, rootFolder, privateRoot, sessionID, expression string) error {
+	if rootFolder == privateRoot || strings.HasPrefix(rootFolder, privateRoot+"/") {
+		return invalidRootFolder("root folder resolves inside the private session directory")
 	}
-	if !strings.HasPrefix(privateRoot, workspace+"/") {
+	if !strings.HasPrefix(privateRoot, rootFolder+"/") {
 		return nil
 	}
 	expected := pathpkg.Join(home, defaultSessionBase, sessionID)
-	if workspace == home && homeRootExpression(expression) && privateRoot == expected {
+	if rootFolder == home && homeRootExpression(expression) && privateRoot == expected {
 		return nil
 	}
-	return invalidRootFolder("workspace may contain private session state only at $HOME/.cybershuttle/sessions/{sessionId}")
+	return invalidRootFolder("root folder may contain private session state only at $HOME/.cybershuttle/sessions/{sessionId}")
 }
 
 func (s Service) discover(ctx context.Context, alias string) (Resource, error) {
@@ -241,7 +241,7 @@ func (s Service) discover(ctx context.Context, alias string) (Resource, error) {
 		}
 		partitions[index] = Partition{Name: discovered.Name, CPUCount: discovered.CPUCount, MemoryMB: discovered.MemoryMB, GRES: values}
 	}
-	return Resource{Host: alias, Accounts: discovered.Accounts, Partitions: partitions, HomeDir: discovered.Home}, nil
+	return Resource{Alias: alias, Accounts: discovered.Accounts, Partitions: partitions, HomeDir: discovered.Home}, nil
 }
 
 const provisionTimeout = 5 * time.Minute
@@ -329,12 +329,12 @@ printf '%s\n' 'provision=complete'
 `
 
 var provisionFailures = map[string]string{
-	"arguments":            "the host was given paths it could not use",
+	"arguments":            "the SSH host was given paths it could not use",
 	"linkspan-directory":   "could not create the directory the Linkspan binary belongs in",
-	"architecture":         "the host reports an architecture Linkspan is not released for",
+	"architecture":         "the SSH host reports an architecture Linkspan is not released for",
 	"linkspan-download":    "could not download the Linkspan release",
 	"linkspan-install":     "could not install the downloaded Linkspan binary",
-	"linkspan-unsupported": "the Linkspan on this host is older than " + linkspanFloor + ", so it cannot link this session to cs-plane",
+	"linkspan-unsupported": "the Linkspan on this SSH host is older than " + linkspanFloor + ", so it cannot link this session to cs-plane",
 	"workflow":             "could not write the workflow the session runs",
 }
 
@@ -384,7 +384,7 @@ func buildScript(session Session, linkspan string) string {
 	lines = append(lines,
 		"set -eu", "umask 077", `LOG_DIR="$HOME/.cybershuttle/logs"`, `install -d -m 700 "$LOG_DIR"`, `exec >"$LOG_DIR/`+logBase+`.out" 2>"$LOG_DIR/`+logBase+`.err"`, "unset XDG_RUNTIME_DIR TMPDIR",
 		"LINKSPAN_BIN="+ssh.ShellQuote(linkspan),
-		`exec "$LINKSPAN_BIN" --port "$CS_CONTROL_PORT" `+linkspanTunnelArgs(session.TunnelModes)+` --workflow `+ssh.ShellQuote(sessionWorkflowPath(session)),
+		`exec "$LINKSPAN_BIN" --port "$CS_CONTROL_PORT" `+linkspanTransportArgs(session.TunnelModes)+` --workflow `+ssh.ShellQuote(sessionWorkflowPath(session)),
 		"")
 	return strings.Join(lines, "\n")
 }
@@ -399,7 +399,7 @@ func sessionWorkflow(session Session) string {
 		"      - name: Start Jupyter Server",
 		"        action: jupyter.sessions.start",
 		"        params:",
-		"          root_dir: " + fmt.Sprintf("%q", session.WorkspaceRoot),
+		"          root_dir: " + fmt.Sprintf("%q", session.RootFolderPath),
 		"          addr: " + fmt.Sprintf("%q", "127.0.0.1:"+port),
 		"",
 	}, "\n")
@@ -429,10 +429,10 @@ func (s Service) linkURL(id string) string {
 	return "ws" + strings.TrimPrefix(s.PublicURL, "http") + "/api/v1/sessions/" + id + "/link"
 }
 
-func (s Service) submitSessionScript(ctx context.Context, host string, session Session, script string, capability sessionCapability, hostToken string) (string, error) {
-	environment := linkspanEnvironment(session.TunnelModes, s.linkURL(session.ID), capability.LinkToken, session.Tunnel, hostToken)
+func (s Service) submitSessionScript(ctx context.Context, alias string, session Session, script string, capability sessionCapability, hostToken string) (string, error) {
+	environment := linkspanEnvironment(session.TunnelModes, s.linkURL(session.ID), capability.LinkToken, session.Devtunnel, hostToken)
 	environment["JUPYTER_TOKEN"], environment["CS_CONTROL_PORT"] = capability.JupyterToken, strconv.Itoa(int(ports(session.ID, session.Seq).Control))
-	return slurm.Submit(ctx, s.runner, host, slurm.SubmitRequest{JobName: session.JobName, Script: script, Environment: environment})
+	return slurm.Submit(ctx, s.runner, alias, slurm.SubmitRequest{JobName: session.JobName, Script: script, Environment: environment})
 }
 
 func (s Service) provisionSession(alias string, session Session, home, linkspan string) error {
@@ -479,17 +479,17 @@ func (s Service) prepareSession(ctx context.Context, request CreateRequest) (_ *
 		if resultErr != nil {
 			status := "Session preparation failed"
 			if security.For(resultErr).Code == "ssh_authentication_required" {
-				status = "Interactive SSH login required"
+				status = "Interactive SSH authentication required"
 			}
 			s.sessionStatus(request.ID, status)
 		}
 	}()
-	resource, err := s.discover(ctx, request.SSHHost)
+	resource, err := s.discover(ctx, request.Alias)
 	if err != nil {
 		return nil, fmt.Errorf("discover session resource: %w", err)
 	}
 	if request.Account != "" && !slices.Contains(resource.Accounts, request.Account) {
-		return nil, security.New("invalid_account", "Slurm account was not discovered for this host", http.StatusBadRequest)
+		return nil, security.New("invalid_account", "Slurm account was not discovered for this SSH host", http.StatusBadRequest)
 	}
 	if err := validatePartitionResources(resource.Partitions, request.Partition, request.Resources); err != nil {
 		return nil, err
@@ -498,25 +498,25 @@ func (s Service) prepareSession(ctx context.Context, request CreateRequest) (_ *
 	if !safeRemotePath(privateRoot) {
 		return nil, errors.New("resolved private session path is unsafe")
 	}
-	workspaceRoot, err := s.resolveWorkspaceRoot(ctx, request.SSHHost, resource.HomeDir, request.RootFolder)
+	rootFolderPath, err := s.resolveRootFolder(ctx, request.Alias, resource.HomeDir, request.RootFolder)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateWorkspacePrivateLayout(resource.HomeDir, workspaceRoot, privateRoot, request.ID, request.RootFolder); err != nil {
+	if err := validateRootFolderPrivateLayout(resource.HomeDir, rootFolderPath, privateRoot, request.ID, request.RootFolder); err != nil {
 		return nil, err
 	}
 	session := Session{
-		SessionResponse: SessionResponse{ID: request.ID, SSHHost: request.SSHHost, Account: request.Account, Partition: request.Partition, RootFolder: request.RootFolder, Resources: request.Resources, TunnelModes: request.TunnelModes},
-		PrivateRoot:     privateRoot, WorkspaceRoot: workspaceRoot,
+		SessionResponse: SessionResponse{ID: request.ID, Alias: request.Alias, Account: request.Account, Partition: request.Partition, RootFolder: request.RootFolder, Resources: request.Resources, TunnelModes: request.TunnelModes},
+		PrivateRoot:     privateRoot, RootFolderPath: rootFolderPath,
 	}
 	s.sessionStatus(request.ID, "Session preparation complete")
 	linkspan := resolveRemoteExecutable(s.LinkspanPath, resource.HomeDir)
 	return &preparedSession{session: session, script: buildScript(session, linkspan), home: resource.HomeDir, linkspan: linkspan}, nil
 }
 
-func (s Service) resolveWorkspaceRoot(ctx context.Context, alias, home, expression string) (string, error) {
-	if !validWorkspaceExpression(expression) || !safeRemotePath(home) {
-		return "", invalidRootFolder("workspace expression is invalid")
+func (s Service) resolveRootFolder(ctx context.Context, alias, home, expression string) (string, error) {
+	if !validRootFolderExpression(expression) || !safeRemotePath(home) {
+		return "", invalidRootFolder("root folder expression is invalid")
 	}
 	base, suffix := home, ""
 	switch {
@@ -525,18 +525,18 @@ func (s Service) resolveWorkspaceRoot(ctx context.Context, alias, home, expressi
 		base = expression
 	case strings.HasPrefix(expression, "~/"):
 		suffix = strings.TrimPrefix(expression, "~/")
-	case workspaceVar.MatchString(expression):
-		match := workspaceVar.FindStringSubmatch(expression)
+	case rootFolderVar.MatchString(expression):
+		match := rootFolderVar.FindStringSubmatch(expression)
 		name := cmp.Or(match[1], match[2])
 		suffix = match[3]
 		if name != "HOME" {
 			output, err := s.runner.Run(ctx, alias, nil, "printenv", name)
 			if err != nil {
-				return "", invalidRootFolder("workspace environment variable " + name + " is unavailable")
+				return "", invalidRootFolder("root folder environment variable " + name + " is unavailable")
 			}
 			base, err = oneRemotePath(output)
 			if err != nil {
-				return "", invalidRootFolder("workspace environment variable " + name + " must contain one absolute safe path")
+				return "", invalidRootFolder("root folder environment variable " + name + " must contain one absolute safe path")
 			}
 		}
 	default:
@@ -547,7 +547,7 @@ func (s Service) resolveWorkspaceRoot(ctx context.Context, alias, home, expressi
 		resolved = pathpkg.Join(base, suffix)
 	}
 	if !safeRemotePath(resolved) {
-		return "", invalidRootFolder("workspace resolves to an unsafe path")
+		return "", invalidRootFolder("root folder resolves to an unsafe path")
 	}
 	return resolved, nil
 }

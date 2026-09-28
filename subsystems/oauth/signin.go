@@ -1,4 +1,4 @@
-// The sign-in relay finishes CILogon grants while keeping the client secret server-side: the browser's
+// The sign-in routes finish CILogon grants while keeping the client secret server-side: the browser's
 // authorization-code flow with PKCE, and the device grant for a client that cannot receive a redirect. Only config and
 // exchange serve browsers alone and require an Origin; device, its poll and refresh also serve native clients. A
 // device poll answers pending as a status, not an error. Upstream failures are classified without provider details.

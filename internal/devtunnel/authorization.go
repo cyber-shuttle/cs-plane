@@ -35,11 +35,11 @@ const (
 
 var (
 	ErrUnknownProvider          = errors.New("unknown Dev Tunnels authorization provider")
-	ErrAuthorizationDenied      = errors.New("dev tunnels authorization denied")
-	ErrAuthorizationExpired     = errors.New("dev tunnels authorization expired")
-	ErrAuthorizationUnavailable = errors.New("dev tunnels authorization unavailable")
+	ErrAuthorizationDenied      = errors.New("authorization for Dev Tunnels was denied")
+	ErrAuthorizationExpired     = errors.New("authorization for Dev Tunnels expired")
+	ErrAuthorizationUnavailable = errors.New("authorization for Dev Tunnels is unavailable")
 	ErrAuthorizationInvalid     = errors.New("invalid Dev Tunnels authorization response")
-	ErrAuthorizationRejected    = errors.New("dev tunnels authorization rejected")
+	ErrAuthorizationRejected    = errors.New("authorization for Dev Tunnels was rejected")
 )
 
 type authorizationProvider struct {
@@ -98,7 +98,7 @@ func (a *Authorizer) Supports(provider string) bool {
 	return ok
 }
 
-// postForm posts the provider's client_id and scope with form to endpoint; any transport or non-2xx failure is
+// postForm posts the provider's client_id and scope with form to endpoint; any network or non-2xx failure is
 // ErrAuthorizationUnavailable.
 func (a *Authorizer) postForm(ctx context.Context, provider authorizationProvider, endpoint string, form url.Values) ([]byte, error) {
 	form.Set("client_id", provider.clientID)

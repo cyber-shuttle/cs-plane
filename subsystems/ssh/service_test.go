@@ -96,11 +96,11 @@ func TestSSHResourcesArePrincipalScopedAndNeverReturnPrivateKeys(t *testing.T) {
 	if response := testutil.Serve(handler, requestAs(otherTestPrincipal, http.MethodGet, "/api/v1/keys/ssh", nil)); strings.Contains(response.Body.String(), "delta-key") {
 		t.Fatalf("another principal saw the key: %s", response.Body.String())
 	}
-	if response := testutil.Serve(handler, requestAs(otherTestPrincipal, http.MethodPost, "/api/v1/hosts", []byte(`{"name":"delta","command":"ssh me@login.example.edu","keyId":"delta-key"}`))); response.Code != http.StatusNotFound {
+	if response := testutil.Serve(handler, requestAs(otherTestPrincipal, http.MethodPost, "/api/v1/hosts", []byte(`{"alias":"delta","command":"ssh me@login.example.edu","keyId":"delta-key"}`))); response.Code != http.StatusNotFound {
 		t.Fatalf("another principal assigned the key: %d %s", response.Code, response.Body.String())
 	}
 
-	createdHost := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, "/api/v1/hosts", []byte(`{"name":"delta","command":"ssh me@login.example.edu","keyId":"delta-key"}`)))
+	createdHost := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, "/api/v1/hosts", []byte(`{"alias":"delta","command":"ssh me@login.example.edu","keyId":"delta-key"}`)))
 	config, err := os.ReadFile(service.Configs.ConfigPath(testPrincipal))
 	testutil.Check(t, err)
 	keyPath := service.Store.sshPath(security.PrincipalDirName(testPrincipal), "delta-key")
@@ -128,7 +128,7 @@ func TestSSHResourcesArePrincipalScopedAndNeverReturnPrivateKeys(t *testing.T) {
 	if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodDelete, "/api/v1/hosts/delta", nil)); response.Code != http.StatusNoContent || response.Body.Len() != 0 {
 		t.Fatalf("host delete = %d %s", response.Code, response.Body.String())
 	}
-	if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodGet, "/api/v1/hosts", nil)); strings.Contains(response.Body.String(), `"name":"delta"`) {
+	if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodGet, "/api/v1/hosts", nil)); strings.Contains(response.Body.String(), `"alias":"delta"`) {
 		t.Fatalf("deleted host remains: %s", response.Body.String())
 	}
 }
@@ -148,7 +148,7 @@ func TestConcurrentHostAssignmentAndKeyDeletionLeaveNoReference(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			assigned, assignedErr = service.addHost(testPrincipal, AddHostRequest{Name: name, Command: "ssh login.example.edu", Key: name})
+			assigned, assignedErr = service.addHost(testPrincipal, AddHostRequest{Alias: name, Command: "ssh login.example.edu", Key: name})
 		}()
 		go func() {
 			defer wait.Done()
@@ -167,7 +167,7 @@ func TestConcurrentHostAssignmentAndKeyDeletionLeaveNoReference(t *testing.T) {
 		hosts, err := service.Store.loadHosts(security.PrincipalDirName(testPrincipal))
 		testutil.Check(t, err)
 		for _, host := range hosts {
-			if host.Name == name && host.Key != "" {
+			if host.Alias == name && host.Key != "" {
 				t.Fatalf("deleted %s remains assigned: %+v", name, host)
 			}
 		}

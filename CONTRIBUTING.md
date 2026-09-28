@@ -36,7 +36,7 @@ SQL lives in each subsystem's `schema.sql` and `query.sql`; `go generate ./inter
 ## Source layout
 
 `main.go` is the composition root. `internal/` holds packages with no HTTP surface; `subsystems/` holds `oauth`,
-`ssh`, `tunnel` and `session`, each owning its wire shapes, logic and routes. A package's request and response
+`ssh`, `devtunnels` and `session`, each owning its wire shapes, logic and routes. A package's request and response
 types live in its `wire.go` and nowhere else, because clients generate their TypeScript types from those files.
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) gives the import rules and trust boundaries. Comments explain why, not
 what.

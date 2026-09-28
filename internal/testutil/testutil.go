@@ -1,5 +1,5 @@
 // Package testutil holds the small assertions and waits shared across otherwise independent tests. It sits below
-// every production package so tests reuse mechanics without importing another domain.
+// every production package so tests share mechanics without importing another domain.
 package testutil
 
 import (

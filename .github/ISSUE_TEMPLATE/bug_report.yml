@@ -58,16 +58,16 @@ body:
     attributes:
       label: Cluster
       description: >
-        For anything involving SSH, Slurm or an session: what scheduler and version the login node runs,
-        whether the login node has outbound internet to astral.sh and github.com, and whether the host had
+        For anything involving SSH, Slurm or a session: what scheduler and version the SSH host runs,
+        whether the SSH host has outbound internet to astral.sh and github.com, and whether it had
         been prepared before.
   - type: textarea
     id: logs
     attributes:
       label: Logs
       description: >
-        cs-plane output and any session log tail. Remove OIDC ID tokens, Dev Tunnel connect and host tokens, and
-        Jupyter tokens before pasting.
+        cs-plane output and any session log tail. Redact OIDC ID tokens, Dev Tunnel host and connect tokens, link
+        tokens and Jupyter tokens before pasting.
       render: shell
   - type: markdown
     attributes:

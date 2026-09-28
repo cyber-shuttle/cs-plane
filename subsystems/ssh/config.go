@@ -1,5 +1,5 @@
-// Host values parse from a pasted ssh command restricted to connection options and allowlisted directives, and
-// render to one OpenSSH stanza. The parsed value is both the wire shape and the stored payload. A host's only
+// SSH host entries parse from a pasted ssh command restricted to connection options and allowlisted directives, and
+// render to one OpenSSH stanza. The parsed value is both the wire shape and the stored payload. An SSH host's only
 // credential is the stored key its keyId names, so the command takes no -i and no identity option; the key's path is
 // supplied at render time and never stored or returned.
 package ssh
@@ -38,7 +38,7 @@ func (h HostEntry) stanza(identityFile string) []string {
 	if h.Key != "" {
 		config["identityfile"], config["identitiesonly"] = []string{identityFile}, []string{"yes"}
 	}
-	lines := []string{"Host " + h.Name}
+	lines := []string{"Host " + h.Alias}
 	for _, key := range slices.Sorted(maps.Keys(config)) {
 		for _, value := range config[key] {
 			lines = append(lines, "    "+key+" "+value)
@@ -88,15 +88,15 @@ func option(key, value string) (string, error) {
 	return key + " " + value, nil
 }
 
-func parseCommand(name, command string) (HostEntry, error) {
-	if !ssh.ValidAlias(name) {
+func parseCommand(alias, command string) (HostEntry, error) {
+	if !ssh.ValidAlias(alias) {
 		return HostEntry{}, ssh.ErrInvalidAlias
 	}
 	fields := strings.Fields(command)
 	if len(fields) > 0 && strings.EqualFold(filepath.Base(fields[0]), "ssh") {
 		fields = fields[1:]
 	}
-	host := HostEntry{Name: name, Port: 22, ExtraDirectives: []string{}}
+	host := HostEntry{Alias: alias, Port: 22, ExtraDirectives: []string{}}
 	target := ""
 	for index := 0; index < len(fields); index++ {
 		field := fields[index]
@@ -164,6 +164,6 @@ func parseCommand(name, command string) (HostEntry, error) {
 		}
 		target = hostname
 	}
-	host.Hostname, err = validText("host name", target)
+	host.Hostname, err = validText("hostname", target)
 	return host, err
 }

@@ -18,7 +18,7 @@ type Partition struct {
 }
 
 type Resource struct {
-	Host       string      `json:"host"`
+	Alias      string      `json:"alias"`
 	Accounts   []string    `json:"accounts"`
 	Partitions []Partition `json:"partitions"`
 	HomeDir    string      `json:"homeDir"`
@@ -35,7 +35,7 @@ type Resources struct {
 type CreateRequest struct {
 	ID             string    `json:"-"`
 	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
-	SSHHost        string    `json:"sshHost"`
+	Alias          string    `json:"alias"`
 	Account        string    `json:"account,omitempty"`
 	Partition      string    `json:"partition"`
 	RootFolder     string    `json:"rootFolder"`
@@ -47,8 +47,8 @@ type SessionResponse struct {
 	ID          string    `json:"id"`
 	Seq         int       `json:"seq"`
 	State       string    `json:"state"`
-	Launcher    string    `json:"launcher"`
-	SSHHost     string    `json:"sshHost"`
+	Platform    string    `json:"platform"`
+	Alias       string    `json:"alias"`
 	Account     string    `json:"account,omitempty"`
 	Partition   string    `json:"partition"`
 	RootFolder  string    `json:"rootFolder"`
@@ -78,6 +78,7 @@ type DevtunnelAccess struct {
 
 type AttachResponse struct {
 	Session   SessionResponse  `json:"session"`
+	Port      uint16           `json:"port"`
 	Link      *LinkAccess      `json:"link,omitempty"`
 	Devtunnel *DevtunnelAccess `json:"devtunnel,omitempty"`
 }
@@ -107,20 +108,6 @@ type RunList struct {
 	Runs []Run `json:"runs"`
 }
 
-type FinishedRun struct {
-	FinalState string         `json:"finalState"`
-	Error      string         `json:"error,omitempty"`
-	StartedAt  time.Time      `json:"startedAt,omitzero"`
-	EndedAt    time.Time      `json:"endedAt"`
-	Stats      *RunStats      `json:"stats,omitempty"`
-	Samples    []MetricSample `json:"samples,omitempty"`
-}
-
-type SessionHistory struct {
-	CreatedAt time.Time     `json:"createdAt,omitzero"`
-	Runs      []FinishedRun `json:"runs"`
-}
-
 type SSHAccessResponse struct {
 	Port int `json:"port"`
 }
@@ -143,7 +130,7 @@ type GPUSample struct {
 	MemTotalMiB int `json:"memTotalMiB"`
 }
 
-type MetricSample struct {
+type UsageSample struct {
 	At           time.Time   `json:"at"`
 	MemBytes     *int64      `json:"memBytes,omitempty"`
 	CPUUsageUsec *int64      `json:"cpuUsageUsec,omitempty"`
@@ -151,8 +138,8 @@ type MetricSample struct {
 }
 
 type SessionSeries struct {
-	SessionID string         `json:"sessionId"`
-	Samples   []MetricSample `json:"samples"`
+	SessionID string        `json:"sessionId"`
+	Samples   []UsageSample `json:"samples"`
 }
 
 type RunStats struct {
@@ -167,7 +154,8 @@ type RunStats struct {
 type Run struct {
 	SessionID   string           `json:"sessionId"`
 	Seq         int              `json:"seq"`
-	SSHHost     string           `json:"sshHost"`
+	Platform    string           `json:"platform,omitempty"`
+	Alias       string           `json:"alias"`
 	Account     string           `json:"account,omitempty"`
 	Partition   string           `json:"partition"`
 	RootFolder  string           `json:"rootFolder"`
@@ -178,6 +166,6 @@ type Run struct {
 	StartedAt   time.Time        `json:"startedAt,omitzero"`
 	EndedAt     time.Time        `json:"endedAt"`
 	Stats       *RunStats        `json:"stats,omitempty"`
-	Samples     []MetricSample   `json:"samples,omitempty"`
+	Samples     []UsageSample    `json:"samples,omitempty"`
 	Logs        []SessionLogLine `json:"logs,omitempty"`
 }

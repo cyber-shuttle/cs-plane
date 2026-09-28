@@ -1,7 +1,7 @@
 // Package session owns session orchestration and its HTTP surface. RunnerProvider supplies principal-scoped
-// SSH execution, while TunnelCredentials supplies linked Dev Tunnels credentials; sessions owns the resulting
-// state, tunnel, telemetry, and run lifecycles. Every exported operation takes the acting principal explicitly and
-// checks ownership itself, so it is usable without HTTP; Routes are one-line adapters over those operations.
+// SSH execution, while DevtunnelCredentials supplies connected Dev Tunnels accounts; sessions owns the resulting
+// state, Dev Tunnel, run history, and run lifecycles. Every exported operation takes the acting principal
+// explicitly and checks ownership itself, so it is usable without HTTP; Routes are one-line adapters over those operations.
 package session
 
 import (
@@ -30,12 +30,12 @@ const maxSessionError = 4096
 var (
 	idPattern         = regexp.MustCompile(`^s-[a-f0-9]{12}$`)
 	remotePathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
-	workspaceVar      = regexp.MustCompile(`^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})(?:/(.*))?$`)
-	workspaceSegment  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	rootFolderVar     = regexp.MustCompile(`^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})(?:/(.*))?$`)
+	rootFolderSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	createLocks       [64]sync.Mutex
 )
 
-type tunnelMetadata struct {
+type devtunnelMetadata struct {
 	ID        string    `json:"id"`
 	ClusterID string    `json:"clusterId"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -43,13 +43,13 @@ type tunnelMetadata struct {
 
 type Session struct {
 	SessionResponse
-	Owner         security.Principal `json:"owner"`
-	Tunnel        tunnelMetadata     `json:"tunnel"`
-	JobID         string             `json:"jobId,omitempty"`
-	JobName       string             `json:"jobName"`
-	Node          string             `json:"node,omitempty"`
-	PrivateRoot   string             `json:"privateRoot"`
-	WorkspaceRoot string             `json:"workspaceRoot"`
+	Owner          security.Principal `json:"owner"`
+	Devtunnel      devtunnelMetadata  `json:"devtunnel"`
+	JobID          string             `json:"jobId,omitempty"`
+	JobName        string             `json:"jobName"`
+	Node           string             `json:"node,omitempty"`
+	PrivateRoot    string             `json:"privateRoot"`
+	RootFolderPath string             `json:"rootFolderPath"`
 }
 
 type state struct {
@@ -58,8 +58,8 @@ type state struct {
 }
 
 const (
-	launcherPlane  = "cs-plane"
-	launcherClient = "client"
+	platformJupyterLab = "jupyterlab"
+	platformVSCode     = "vscode"
 )
 
 const DefaultLinkspanPath = "$HOME/.cybershuttle/bin/linkspan"
@@ -75,29 +75,29 @@ type RunnerProvider interface {
 	Runner(principal security.Principal) ssh.Runner
 }
 
-type TunnelManager interface {
+type DevtunnelManager interface {
 	Create(context.Context, devtunnel.CreateRequest) (devtunnel.Record, error)
 	Get(context.Context, devtunnel.GetRequest) (devtunnel.Record, error)
 	Delete(context.Context, devtunnel.DeleteRequest) error
 }
 
 type Config struct {
-	Runners           RunnerProvider
-	Store             Store
-	LinkspanPath      string
-	TunnelManager     TunnelManager
-	TunnelCredentials TunnelCredentials
-	CapabilityDir     string
-	PublicURL         string
-	TunnelTimeout     time.Duration
-	Origins           security.Origins
+	Runners              RunnerProvider
+	Store                Store
+	LinkspanPath         string
+	DevtunnelManager     DevtunnelManager
+	DevtunnelCredentials DevtunnelCredentials
+	CapabilityDir        string
+	PublicURL            string
+	UpstreamTimeout      time.Duration
+	Origins              security.Origins
 }
 
 type Service struct {
 	Config
 	runner           ssh.Runner
 	logs             *sessionLogs
-	metrics          *sessionMetrics
+	usage            *sessionUsage
 	links            *sync.Map
 	transport        *http.Transport
 	hostPreparations *sync.Map
@@ -182,14 +182,14 @@ func NewService(config Config) *Service {
 		config.LinkspanPath = DefaultLinkspanPath
 	}
 	service := &Service{
-		Config: config, logs: newSessionLogs(), metrics: newSessionMetrics(), links: &sync.Map{},
+		Config: config, logs: newSessionLogs(), usage: newSessionUsage(), links: &sync.Map{},
 		hostPreparations: &sync.Map{}, now: time.Now, runtime: newSessionRuntime(),
 	}
 	service.transport = newSessionTransport(service.dialHost)
 	service.runtime.start(func(ctx context.Context) {
 		every(ctx, backgroundInterval, func(context.Context) { service.triggerRefresh() })
 	})
-	service.runtime.start(func(ctx context.Context) { every(ctx, metricSampleInterval, service.sampleAndAccount) })
+	service.runtime.start(func(ctx context.Context) { every(ctx, usageSampleInterval, service.sampleAndAccount) })
 	return service
 }
 
@@ -219,13 +219,12 @@ func (s Service) forPrincipal(principal security.Principal) Service {
 }
 
 var (
-	errSessionNotFound     = security.New("session_not_found", "session not found", http.StatusNotFound)
-	errOwnerMismatch       = security.New("session_owner_mismatch", "session is owned by another principal", http.StatusForbidden)
-	errSessionRunning      = security.New("session_running", "session is still running; stop it before running it again", http.StatusConflict)
-	errIdempotencyConflict = security.New("idempotency_conflict", "idempotency key was already used for another request", http.StatusConflict)
-	errServiceStopping     = security.New("service_stopping", "The session service is stopping.", http.StatusServiceUnavailable)
-	errSessionHasHistory   = security.New("session_has_history", "session already has a run history", http.StatusConflict)
-	errTunnelLinkRequired  = security.New("tunnel_link_required", "the devtunnel mode requires a linked Dev Tunnels account", http.StatusConflict)
+	errSessionNotFound           = security.New("session_not_found", "session not found", http.StatusNotFound)
+	errOwnerMismatch             = security.New("session_owner_mismatch", "session is owned by another principal", http.StatusForbidden)
+	errSessionRunning            = security.New("session_running", "session is still running; stop it before starting it again", http.StatusConflict)
+	errIdempotencyConflict       = security.New("idempotency_conflict", "idempotency key was already used for another request", http.StatusConflict)
+	errServiceStopping           = security.New("service_stopping", "The session service is stopping.", http.StatusServiceUnavailable)
+	errDevtunnelsAccountRequired = security.New("devtunnels_account_required", "the devtunnel transport requires a connected Dev Tunnels account", http.StatusConflict)
 )
 
 func (s Service) utcNow() time.Time { return s.now().UTC() }
@@ -270,12 +269,12 @@ func (s Service) Discover(ctx context.Context, principal security.Principal, ali
 	return s.forPrincipal(principal).discover(ctx, alias)
 }
 
-func (s Service) Metrics(principal security.Principal, id string) (SessionSeries, error) {
+func (s Service) Usage(principal security.Principal, id string) (SessionSeries, error) {
 	session, err := s.Get(principal, id)
 	if err != nil {
 		return SessionSeries{}, err
 	}
-	return SessionSeries{SessionID: session.ID, Samples: s.metrics.samples(session.ID)}, nil
+	return SessionSeries{SessionID: session.ID, Samples: s.usage.samples(session.ID)}, nil
 }
 
 func view(session *Session, err error) (SessionResponse, error) {
@@ -379,13 +378,6 @@ func (s Service) Routes() router.Routes {
 		"/api/v1/sessions/{id}/stop": {http.MethodPost: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, request *http.Request) (SessionResponse, error) {
 			return view(s.Stop(principal, id(request)))
 		})},
-		"/api/v1/sessions/{id}/runs": {http.MethodPost: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, request *http.Request) (SessionResponse, error) {
-			body, err := decoded[SessionHistory](request)
-			if err != nil {
-				return SessionResponse{}, err
-			}
-			return view(s.AdoptRuns(principal, id(request), body))
-		})},
 		"/api/v1/sessions/{id}/access": {http.MethodGet: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, request *http.Request) (*SessionAccessResponse, error) {
 			return s.Access(principal, id(request))
 		})},
@@ -398,10 +390,10 @@ func (s Service) Routes() router.Routes {
 			}
 			return s.StartSSH(request.Context(), principal, id(request), body.PublicKey)
 		})},
-		"/api/v1/sessions/{id}/metrics": {http.MethodGet: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, request *http.Request) (SessionSeries, error) {
-			return s.Metrics(principal, id(request))
+		"/api/v1/sessions/{id}/usage": {http.MethodGet: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, request *http.Request) (SessionSeries, error) {
+			return s.Usage(principal, id(request))
 		})},
-		"/api/v1/telemetry": {http.MethodGet: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, _ *http.Request) (RunList, error) {
+		"/api/v1/runs": {http.MethodGet: security.AnswerAsPrincipal(http.StatusOK, func(principal security.Principal, _ *http.Request) (RunList, error) {
 			runs, err := s.Runs(principal)
 			return RunList{Runs: runs}, err
 		})},

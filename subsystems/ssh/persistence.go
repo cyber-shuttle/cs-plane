@@ -1,7 +1,7 @@
-// SSH host persistence coordinates SQL metadata with rendered per-principal config and protected key files. Host
-// and key tables remain private to this subsystem; a process-wide database lock encloses each compensated flow, and
-// only its metadata mutation runs in a transaction. Queries in query.sql are generated into query.sql.go by sqlc.
-// The real OpenSSH config is never read or changed.
+// SSH host persistence coordinates SQL metadata with rendered per-principal config and protected key files. SSH
+// host and key tables remain private to this subsystem; a process-wide database lock encloses each compensated
+// flow, and only its metadata mutation runs in a transaction. Queries in query.sql are generated into query.sql.go
+// by sqlc. The real OpenSSH config is never read or changed.
 package ssh
 
 import (
@@ -40,7 +40,7 @@ func hostsIn(queries *Queries, principal string) ([]HostEntry, error) {
 	}
 	hosts := make([]HostEntry, 0, len(rows))
 	for _, row := range rows {
-		host, err := db.DecodePayload(row.Payload, func(h HostEntry) bool { return h.Name == row.Host }, "SSH host "+row.Host)
+		host, err := db.DecodePayload(row.Payload, func(h HostEntry) bool { return h.Alias == row.Host }, "SSH host "+row.Host)
 		if err != nil {
 			return nil, err
 		}
@@ -54,16 +54,16 @@ func replaceHost(queries *Queries, principal string, host HostEntry) error {
 	if err != nil {
 		return err
 	}
-	rows, err := queries.UpdateHost(background, UpdateHostParams{Payload: string(payload), Principal: principal, Host: host.Name})
+	rows, err := queries.UpdateHost(background, UpdateHostParams{Payload: string(payload), Principal: principal, Host: host.Alias})
 	if err == nil && rows == 0 {
-		return hostNotFound(host.Name)
+		return hostNotFound(host.Alias)
 	}
 	return err
 }
 
 func (s Store) renderConfig(principal string, hosts []HostEntry) []byte {
 	lines := make([]string, 0, len(hosts))
-	for _, host := range slices.SortedFunc(slices.Values(hosts), func(a, b HostEntry) int { return strings.Compare(a.Name, b.Name) }) {
+	for _, host := range slices.SortedFunc(slices.Values(hosts), func(a, b HostEntry) int { return strings.Compare(a.Alias, b.Alias) }) {
 		lines = append(lines, host.stanza(s.sshPath(principal, host.Key))...)
 	}
 	return []byte(strings.Join(lines, "\n"))
@@ -87,7 +87,7 @@ func (s Store) loadHosts(principal string) ([]HostEntry, error) {
 	})
 }
 
-// reconcileConfigs rerenders every principal's config, including directories with no rows left, from committed hosts.
+// reconcileConfigs rerenders every principal's config, including directories with no rows left, from committed SSH hosts.
 func (s Store) reconcileConfigs() error {
 	return s.locked(func(queries *Queries) error {
 		principals, err := queries.ListHostPrincipals(background)
@@ -183,7 +183,7 @@ func (s Store) resolveSSHCredential(queries *Queries, principal string, host Hos
 	return host, nil
 }
 
-// putHost resolves the host's key reference, then stores the resolved entry with store inside one config mutation.
+// putHost resolves the SSH host's key reference, then stores the resolved entry with store inside one config mutation.
 func (s Store) putHost(principal, configPath string, host HostEntry, store func(*Queries, HostEntry) error) (HostEntry, error) {
 	var resolved HostEntry
 	err := s.mutateHosts(principal, configPath, func(queries *Queries) error {
@@ -202,8 +202,8 @@ func (s Store) addHost(principal, configPath string, host HostEntry) (HostEntry,
 		if err != nil {
 			return err
 		}
-		if err := queries.InsertHost(background, InsertHostParams{Principal: principal, Host: host.Name, Payload: string(payload)}); db.IsConstraint(err) {
-			return security.New("ssh_host_exists", host.Name+" is already configured.", http.StatusConflict)
+		if err := queries.InsertHost(background, InsertHostParams{Principal: principal, Host: host.Alias, Payload: string(payload)}); db.IsConstraint(err) {
+			return security.New("ssh_host_exists", host.Alias+" is already configured.", http.StatusConflict)
 		} else {
 			return err
 		}
@@ -216,11 +216,11 @@ func (s Store) updateHost(principal, configPath string, host HostEntry) (HostEnt
 	})
 }
 
-func (s Store) deleteHost(principal, path, name string) error {
+func (s Store) deleteHost(principal, path, alias string) error {
 	return s.mutateHosts(principal, path, func(queries *Queries) error {
-		rows, err := queries.DeleteHost(background, DeleteHostParams{Principal: principal, Host: name})
+		rows, err := queries.DeleteHost(background, DeleteHostParams{Principal: principal, Host: alias})
 		if err == nil && rows == 0 {
-			return hostNotFound(name)
+			return hostNotFound(alias)
 		}
 		return err
 	}, nil)

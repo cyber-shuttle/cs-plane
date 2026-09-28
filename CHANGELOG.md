@@ -1,23 +1,67 @@
 # Changelog
 
-Notable changes to CyberShuttle Plane. The format follows
+Notable changes to cs-plane. The format follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+The next release is 0.4.0.
+
+Upgrading from 0.3.0: stored sessions and runs carry `websocket` and `launcher` and are not migrated, and stored SSH
+hosts carry `name`. Stop every session first. With cs-plane stopped, run against its schema (here `cs_plane`):
+
+```sql
+DELETE FROM cs_plane.runs;
+DELETE FROM cs_plane.sessions;
+UPDATE cs_plane.ssh_hosts SET payload = ((payload::jsonb - 'name') || jsonb_build_object('alias', host))::text;
+```
+
+Then delete the per-run token files and the old sealed Dev Tunnels account files under the state directory:
+
+```sh
+cd ~/.cybershuttle/control
+rm -f credentials/*.token hosts/*/tunnel-link tunnel-link.key .tunnel-link-*.lock
+```
+
+Each user connects their Dev Tunnels account again.
+
 ### Security
 
 - Job submission no longer puts the session environment, including the link and Dev Tunnel host tokens, on
-  `sbatch`'s command line, where any user of the login node could list it; a stdin program exports it instead.
+  `sbatch`'s command line, where any user of the SSH host could list it; a stdin program exports it instead.
+
+### Added
+
+- `attach` answers the run's control `port`, and each run in run history names its `platform`.
 
 ### Changed
 
-- The request and response types of the API and the SSH login frames are exported, so clients generate their
-  TypeScript types from them with tygo. JSON shapes are unchanged.
+- The request and response types of the API and the SSH authentication frames are exported, so clients generate
+  their TypeScript types from them with tygo. JSON shapes are unchanged.
+- Stopping a session without a Dev Tunnel no longer reads the connected Dev Tunnels account.
+- The transport value `websocket` is now `link`: `tunnelModes` takes `link` and `devtunnel` and defaults to
+  `["link"]`, and Linkspan launches with `--tunnel-mode link` and `--tunnel-link-args "--url $CS_LINK_URL"`. Requires
+  Linkspan 0.22.0 or newer.
+- `launcher` is now `platform` on the session record, with the values `jupyterlab` (cs-plane started the run) and
+  `vscode` (a client attached it).
+- SSH host records carry `alias` instead of `name`, sessions and runs carry `alias` instead of `sshHost`, and the
+  SSH host health and Slurm discovery responses carry `alias` instead of `host`.
+- The Dev Tunnels account answers `connected` and `connectedAt` instead of `linked` and `linkedAt`, and a finished
+  authorization poll answers the status `connected` instead of `linked`.
+- The Dev Tunnels account routes move from `/api/v1/tunnel` to `/api/v1/devtunnels`, and the error
+  `tunnel_link_required` is now `devtunnels_account_required`. A connected account is now stored as
+  `hosts/<principal>/devtunnels-account` under `devtunnels-account.key`.
+- Run history moves from `GET /api/v1/telemetry` to `GET /api/v1/runs`, and a session's usage samples from
+  `GET /api/v1/sessions/{id}/metrics` to `GET /api/v1/sessions/{id}/usage`. cs-plane polls Linkspan's
+  `GET /api/v1/usage` instead of `GET /api/v1/metrics`. JSON shapes are unchanged.
+
+### Removed
+
+- `POST /api/v1/sessions/{id}/runs`, which only moved CS Bridge's local history into cs-plane.
 
 ### Fixed
 
-- An expired SSH login while preparing a session answers `409 ssh_authentication_required` instead of
+- Expired SSH authentication while preparing a session answers `409 ssh_authentication_required` instead of
   `502 session_provisioning_failed`.
 
 ## [0.3.0] - 2026-09-24

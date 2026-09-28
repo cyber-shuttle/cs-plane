@@ -1,6 +1,6 @@
-// Package devtunnel is the low-level Dev Tunnels management client. It creates, reads, and deletes tunnels and
-// validates every host and URI the service returns. Credential is a linked-account bearer supplied by transport
-// rather than carried from the inbound request.
+// Package devtunnel is the low-level Dev Tunnels management client. It creates, reads, and deletes Dev Tunnels and
+// validates every host and URI the service returns. Credential is a connected account's bearer supplied by the
+// caller rather than carried from the inbound request.
 package devtunnel
 
 import (
@@ -71,9 +71,9 @@ type CreateRequest struct {
 }
 
 type GetRequest struct {
-	AccessToken string
-	TunnelID    string
-	ClusterID   string
+	ConnectToken string
+	TunnelID     string
+	ClusterID    string
 }
 
 type DeleteRequest struct {
@@ -238,7 +238,7 @@ func (m *client) doRecord(request *http.Request, token, expectedID string, requi
 	hostToken := result.AccessTokens["host"]
 	connectToken := result.AccessTokens["connect"]
 	if requireTokens && (!security.ValidCredential(hostToken) || !security.ValidCredential(connectToken)) {
-		return Record{}, errors.New("Dev Tunnel response omitted required access tokens")
+		return Record{}, errors.New("Dev Tunnel response omitted its host or connect token")
 	}
 	ports, err := validateTunnelPorts(result.Ports)
 	if err != nil {
@@ -277,11 +277,11 @@ func (m *client) Create(ctx context.Context, req CreateRequest) (Record, error) 
 }
 
 func (m *client) Get(ctx context.Context, req GetRequest) (Record, error) {
-	request, err := security.NewRequest(ctx, http.MethodGet, m.tunnelURL(req.TunnelID, req.ClusterID, false, true), "tunnel "+req.AccessToken, nil)
+	request, err := security.NewRequest(ctx, http.MethodGet, m.tunnelURL(req.TunnelID, req.ClusterID, false, true), "tunnel "+req.ConnectToken, nil)
 	if err != nil {
 		return Record{}, err
 	}
-	return m.doRecord(request, req.AccessToken, req.TunnelID, false)
+	return m.doRecord(request, req.ConnectToken, req.TunnelID, false)
 }
 
 func (m *client) Delete(ctx context.Context, req DeleteRequest) error {

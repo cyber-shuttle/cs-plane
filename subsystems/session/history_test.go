@@ -1,4 +1,4 @@
-// Session telemetry tests cover bounded redaction, remote collection, metrics, and durable runs.
+// Session run history tests cover bounded redaction, remote collection, usage samples, and durable runs.
 // Remote log reads stay sequence-scoped and below the SSH output ceiling.
 // Sample windows remain bounded.
 // Terminal runs retain owned history while delayed Slurm accounting remains independently bounded.
@@ -167,12 +167,12 @@ func TestSessionLogTailScriptIsScopedBySeq(t *testing.T) {
 	testutil.Check(t, os.WriteFile(filepath.Join(logDir, id+"-"+strconv.Itoa(oldSeq)+".out"), []byte("finished run output\n"), 0o600))
 
 	if got := remoteSessionLogTail(t, home, id, newSeq); got != "" {
-		t.Fatalf("relaunch read the finished seq's log: %q", got)
+		t.Fatalf("the next run read the finished run's log: %q", got)
 	}
 
 	testutil.Check(t, os.WriteFile(filepath.Join(logDir, id+"-"+strconv.Itoa(newSeq)+".out"), []byte("new run output\n"), 0o600))
 	if got := remoteSessionLogTail(t, home, id, newSeq); got != "new run output\n" {
-		t.Fatalf("new seq log = %q", got)
+		t.Fatalf("next run log = %q", got)
 	}
 }
 
@@ -203,18 +203,18 @@ func TestSessionLogTailScriptWorstCaseStaysUnderTheRemoteOutputCap(t *testing.T)
 }
 
 func TestSampleWindowIsBoundedAndNewestLast(t *testing.T) {
-	metrics := newSessionMetrics()
-	for index := 0; index < maxSessionMetricSamples+5; index++ {
+	usage := newSessionUsage()
+	for index := 0; index < maxUsageSamples+5; index++ {
 		used := int64(index)
-		metrics.append("s-111111111111", MetricSample{At: time.Unix(int64(index), 0), MemBytes: &used})
+		usage.append("s-111111111111", UsageSample{At: time.Unix(int64(index), 0), MemBytes: &used})
 	}
-	series := metrics.samples("s-111111111111")
-	testutil.Equal(t, len(series), maxSessionMetricSamples, "window sample count")
-	if *series[len(series)-1].MemBytes != int64(maxSessionMetricSamples+4) {
+	series := usage.samples("s-111111111111")
+	testutil.Equal(t, len(series), maxUsageSamples, "window sample count")
+	if *series[len(series)-1].MemBytes != int64(maxUsageSamples+4) {
 		t.Fatalf("the newest sample is not last: %+v", series[len(series)-1])
 	}
-	metrics.forget("s-111111111111")
-	if got := metrics.samples("s-111111111111"); len(got) != 0 {
+	usage.forget("s-111111111111")
+	if got := usage.samples("s-111111111111"); len(got) != 0 {
 		t.Fatalf("a forgotten session kept %d samples", len(got))
 	}
 }
@@ -236,7 +236,7 @@ func TestARunOutlivesTheSessionThatEnded(t *testing.T) {
 	session.State = "READY"
 	putSessions(t, service, session)
 	used := int64(4096)
-	service.metrics.append(session.ID, MetricSample{At: time.Now(), MemBytes: &used})
+	service.usage.append(session.ID, UsageSample{At: time.Now(), MemBytes: &used})
 
 	t.Setenv("FAKE_STATUS_LINES", "101|COMPLETED|node1|"+session.JobName+"|3600")
 	testutil.Check(t, service.reconcileAll(context.Background()))
@@ -247,7 +247,7 @@ func TestARunOutlivesTheSessionThatEnded(t *testing.T) {
 	if len(runs[0].Samples) != 1 || *runs[0].Samples[0].MemBytes != used {
 		t.Fatalf("the sample window did not travel with the run: %+v", runs[0].Samples)
 	}
-	if got := service.metrics.samples(session.ID); len(got) != 0 {
+	if got := service.usage.samples(session.ID); len(got) != 0 {
 		t.Fatalf("a finished session kept its live window: %+v", got)
 	}
 	endedAt := runs[0].EndedAt
@@ -272,14 +272,14 @@ func TestEachSeqIsItsOwnRun(t *testing.T) {
 	testutil.Check(t, service.freezeRun(&second))
 	runs := runsIn(t, service)
 	if len(runs) != 2 {
-		t.Fatalf("a relaunch overwrote the previous run: %+v", runs)
+		t.Fatalf("the next run overwrote the previous run: %+v", runs)
 	}
 	if runs[0].Seq != second.Seq || runs[0].Resources.Cores != 8 {
 		t.Fatalf("the newest run is not first, or lost its own session: %+v", runs[0])
 	}
 	testutil.Check(t, service.freezeRun(&second))
 	if runs := runsIn(t, service); len(runs) != 2 {
-		t.Fatalf("recording the same seq twice kept %d runs", len(runs))
+		t.Fatalf("recording the same run twice kept %d runs", len(runs))
 	}
 }
 
@@ -318,8 +318,8 @@ func TestCompleteRunStatsGivesEachPendingRunItsOwnTimeout(t *testing.T) {
 	t.Setenv("FAKE_RUN_STATS_SLEEP_SECONDS", "2")
 	t.Setenv("FAKE_RUN_STATS_OUTPUT", sacctRows)
 	service := newTestService(t, ssh.Runner{SSHBin: sshBin, Timeout: time.Second}, testSessionStore(t))
-	slow := runRecord{Run: Run{SessionID: "s-111111111111", Seq: 1, SSHHost: "delta", EndedAt: service.utcNow()}, Owner: testPrincipal}
-	fast := runRecord{Run: Run{SessionID: "s-222222222222", Seq: 2, SSHHost: "delta", EndedAt: service.utcNow()}, Owner: testPrincipal}
+	slow := runRecord{Run: Run{SessionID: "s-111111111111", Seq: 1, Alias: "delta", EndedAt: service.utcNow()}, Owner: testPrincipal}
+	fast := runRecord{Run: Run{SessionID: "s-222222222222", Seq: 2, Alias: "delta", EndedAt: service.utcNow()}, Owner: testPrincipal}
 	testutil.Check(t, service.Store.locked(func(current *state) error {
 		current.Runs = []runRecord{slow, fast}
 		return service.Store.save(current)

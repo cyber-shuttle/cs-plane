@@ -1,4 +1,4 @@
-// The JSON frames of the interactive SSH login WebSocket, kept in this file alone so clients generate their
+// The JSON frames of the interactive SSH authentication WebSocket, kept in this file alone so clients generate their
 // TypeScript types from it with tygo.
 
 package ssh

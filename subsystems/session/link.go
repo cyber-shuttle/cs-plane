@@ -1,10 +1,10 @@
-// Session traffic. A session's Linkspan dials out and holds one WebSocket, authenticated by the per-seq link token
-// only cs-plane and the job's launcher hold; each stream is a yamux channel on which cs-plane writes the port in two
-// bytes and Linkspan answers 1 carried or 0 refused. A delegated Dev Tunnel, through Linkspan's forward route, is the
-// fallback. HTTP into a job dials host <id>.<seq>.session, which pools connections per seq. Forward
+// Session traffic. A session's Linkspan dials out and holds one WebSocket, authenticated by the per-run link token
+// only cs-plane and whoever started the job hold; each stream is a yamux channel on which cs-plane writes the port
+// in two bytes and Linkspan answers 1 carried or 0 refused. A Dev Tunnel, through Linkspan's forward route,
+// is the fallback. HTTP into a job dials the address <id>.<seq>.session, which pools connections per run. Forward
 // and the Jupyter proxy sit outside the bearer boundary under the shared origin policy, opened by the Jupyter token
 // compared in constant time; a CORS preflight passes through. Forward never reaches Linkspan's control port. A link
-// for the current seq makes a run READY.
+// for the current run makes it READY.
 package session
 
 import (
@@ -38,7 +38,7 @@ const (
 )
 
 var (
-	errNoRoute      = errors.New("the session has no link to cs-plane and no delegated Dev Tunnel")
+	errNoRoute      = errors.New("the session has no link to cs-plane and no Dev Tunnel")
 	errUnauthorized = security.New("unauthorized", "unauthorized", http.StatusUnauthorized)
 	linkUpgrader    = websocket.Upgrader{Subprotocols: []string{ssh.ControlWebSocketProtocol}, CheckOrigin: func(*http.Request) bool { return true }}
 )
@@ -204,13 +204,13 @@ func (s Service) linkspan(ctx context.Context, session Session, method, path str
 		return nil, 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	return security.Do(&http.Client{Transport: s.transport, Timeout: s.TunnelTimeout}, request, limit)
+	return security.Do(&http.Client{Transport: s.transport, Timeout: s.UpstreamTimeout}, request, limit)
 }
 
-func dialForward(ctx context.Context, endpoint tunnelEndpoint, port uint16, timeout time.Duration) (net.Conn, error) {
+func dialForward(ctx context.Context, endpoint devtunnelEndpoint, port uint16, timeout time.Duration) (net.Conn, error) {
 	dialer := websocket.Dialer{HandshakeTimeout: timeout}
 	conn, response, err := dialer.DialContext(ctx, "ws"+strings.TrimPrefix(endpoint.URI, "http")+"/api/v1/forward/"+strconv.Itoa(int(port)),
-		http.Header{tunnelAuthorizationHeader: {"tunnel " + endpoint.ConnectToken}})
+		http.Header{devtunnelAuthorizationHeader: {"tunnel " + endpoint.ConnectToken}})
 	if response != nil {
 		_ = response.Body.Close()
 	}
@@ -223,11 +223,14 @@ func dialForward(ctx context.Context, endpoint tunnelEndpoint, port uint16, time
 func (s Service) dial(ctx context.Context, session Session, port uint16) (net.Conn, error) {
 	mux := s.link(session)
 	if mux == nil {
+		if session.Devtunnel.ID == "" {
+			return nil, errNoRoute
+		}
 		endpoint, err := s.sessionEndpoint(ctx, session, ports(session.ID, session.Seq).Control)
 		if err != nil {
 			return nil, err
 		}
-		return dialForward(ctx, endpoint, port, s.TunnelTimeout)
+		return dialForward(ctx, endpoint, port, s.UpstreamTimeout)
 	}
 	stream, err := mux.OpenStream()
 	if err != nil {
@@ -240,7 +243,7 @@ func (s Service) dial(ctx context.Context, session Session, port uint16) (net.Co
 		_, err = io.ReadFull(stream, frame[:1])
 	}
 	if err == nil && frame[0] != 1 {
-		err = errors.New("linkspan has no server on that port")
+		err = errors.New("the job's Linkspan has no server on that port")
 	}
 	if err != nil {
 		_ = stream.Close()

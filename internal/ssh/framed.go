@@ -1,6 +1,6 @@
 // Marker-delimited output is the shared envelope for discovery, scheduler reconciliation, and remote log tails.
-// Each section name occupies a line of its own so login banner noise remains outside the framed response.
-// The host is untrusted: an out-of-order, missing, duplicate, or unknown marker rejects the whole response
+// Each section name occupies a line of its own so SSH banner noise remains outside the framed response.
+// The SSH host is untrusted: an out-of-order, missing, duplicate, or unknown marker rejects the whole response
 // rather than allowing one protocol to interpret another's output.
 package ssh
 

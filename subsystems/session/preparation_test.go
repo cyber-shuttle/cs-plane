@@ -1,7 +1,7 @@
 // Session preparation tests defend request, path, resource, script, and side-effect boundaries.
-// Remote identity and workspace expressions cannot escape their validated forms.
-// The generated batch script carries identity but never embeds credentials.
-// Failed validation leaves the database, tunnels, capabilities, and Slurm submission untouched.
+// Remote identity and root folder expressions cannot escape their validated forms.
+// The generated job script carries identity but never embeds credentials.
+// Failed validation leaves the database, Dev Tunnels, capabilities, and Slurm submission untouched.
 package session
 
 import (
@@ -37,18 +37,18 @@ func TestDiscoverRejectsUnsafeRemoteUsernameBeforeSacctmgr(t *testing.T) {
 	}
 }
 
-func TestWorkspaceExpressionsRejectUnsafeOrUnavailableValues(t *testing.T) {
+func TestRootFolderExpressionsRejectUnsafeOrUnavailableValues(t *testing.T) {
 	service := testService(t)
 	for _, expression := range []string{"", " ", "/", "../x", "a/../b", "./x", "~/../x", "$HOME/../x", "${HOME}/../x", "$HOME/$USER", "$HOME/", "${WORKSPACE}/", "prefix/$HOME", "$(id)", "`id`", "$BAD-NAME/x", "${BAD-NAME}/x", "path\\x", "path\nother", "$EMPTY", "$RELATIVE", "$MULTILINE"} {
 		t.Run(fmt.Sprintf("%q", expression), func(t *testing.T) {
-			if _, err := service.resolveWorkspaceRoot(context.Background(), "delta", "/home/tester", expression); err == nil {
-				t.Fatalf("accepted unsafe workspace expression %q", expression)
+			if _, err := service.resolveRootFolder(context.Background(), "delta", "/home/tester", expression); err == nil {
+				t.Fatalf("accepted unsafe root folder expression %q", expression)
 			}
 		})
 	}
 }
 
-func TestStartRejectsWorkspaceInsidePrivateSession(t *testing.T) {
+func TestStartRejectsRootFolderInsidePrivateSession(t *testing.T) {
 	request := newTestCreateRequest()
 	request.RootFolder = "/home/tester/.cybershuttle/sessions/s-012345abcdef/workspace"
 	service := testService(t)
@@ -86,18 +86,18 @@ func runProvisionScript(t *testing.T, arguments ...string) (string, error) {
 	return string(output), err
 }
 
-func TestSessionScriptExecsLinkspanWithExactlyTheSelectedModes(t *testing.T) {
+func TestSessionScriptExecsLinkspanWithExactlyTheSelectedTransports(t *testing.T) {
 	const jupyterToken, hostToken, linkToken = "jupyter-secret", "host-secret", "link-secret"
-	const tunnelID, tunnelCluster, linkURL = "s-012345abcdef-g-0123456789abcdef", "usw3", "wss://plane.example.edu/api/v1/sessions/s-012345abcdef/link"
-	websocketArgs := "--tunnel-websocket-args\n--url " + linkURL + "\n"
-	devtunnelArgs := "--tunnel-devtunnel-args\n--id " + tunnelID + " --cluster " + tunnelCluster + "\n"
+	const devtunnelID, devtunnelCluster, linkURL = "s-012345abcdef-g-0123456789abcdef", "usw3", "wss://plane.example.edu/api/v1/sessions/s-012345abcdef/link"
+	linkArgs := "--tunnel-link-args\n--url " + linkURL + "\n"
+	devtunnelArgs := "--tunnel-devtunnel-args\n--id " + devtunnelID + " --cluster " + devtunnelCluster + "\n"
 	for _, test := range []struct {
-		modes               []string
+		transports          []string
 		args, env, exported string
 	}{
-		{[]string{modeWebsocket}, "--tunnel-mode\nwebsocket\n" + websocketArgs, jupyterToken + "\n" + linkToken + "\n\n", "CS_LINK_URL LINKSPAN_LINK_TOKEN"},
-		{[]string{modeDevtunnel}, "--tunnel-mode\ndevtunnel\n" + devtunnelArgs, jupyterToken + "\n\n" + hostToken + "\n", "CS_TUNNEL_CLUSTER CS_TUNNEL_ID LINKSPAN_TUNNEL_HOST_TOKEN"},
-		{[]string{modeDevtunnel, modeWebsocket}, "--tunnel-mode\ndevtunnel,websocket\n" + devtunnelArgs + websocketArgs, jupyterToken + "\n" + linkToken + "\n" + hostToken + "\n", "CS_LINK_URL CS_TUNNEL_CLUSTER CS_TUNNEL_ID LINKSPAN_LINK_TOKEN LINKSPAN_TUNNEL_HOST_TOKEN"},
+		{[]string{transportLink}, "--tunnel-mode\nlink\n" + linkArgs, jupyterToken + "\n" + linkToken + "\n\n", "CS_LINK_URL LINKSPAN_LINK_TOKEN"},
+		{[]string{transportDevtunnel}, "--tunnel-mode\ndevtunnel\n" + devtunnelArgs, jupyterToken + "\n\n" + hostToken + "\n", "CS_DEVTUNNEL_CLUSTER CS_DEVTUNNEL_ID LINKSPAN_TUNNEL_HOST_TOKEN"},
+		{[]string{transportDevtunnel, transportLink}, "--tunnel-mode\ndevtunnel,link\n" + devtunnelArgs + linkArgs, jupyterToken + "\n" + linkToken + "\n" + hostToken + "\n", "CS_DEVTUNNEL_CLUSTER CS_DEVTUNNEL_ID CS_LINK_URL LINKSPAN_LINK_TOKEN LINKSPAN_TUNNEL_HOST_TOKEN"},
 	} {
 		dir := t.TempDir()
 		linkspan := filepath.Join(dir, "linkspan")
@@ -108,8 +108,8 @@ printf '%s\n' "$JUPYTER_TOKEN" "$LINKSPAN_LINK_TOKEN" "$LINKSPAN_TUNNEL_HOST_TOK
 exit 7
 `)
 		session := Session{
-			SessionResponse: SessionResponse{ID: "s-012345abcdef", Seq: 1, Partition: "cpu", Resources: Resources{Cores: 1, MemoryMB: 128, WallMinutes: 1}, TunnelModes: test.modes},
-			JobName:         jobName("s-012345abcdef", 1), PrivateRoot: dir + "/private", WorkspaceRoot: dir,
+			SessionResponse: SessionResponse{ID: "s-012345abcdef", Seq: 1, Partition: "cpu", Resources: Resources{Cores: 1, MemoryMB: 128, WallMinutes: 1}, TunnelModes: test.transports},
+			JobName:         jobName("s-012345abcdef", 1), PrivateRoot: dir + "/private", RootFolderPath: dir,
 		}
 		script := buildScript(session, linkspan)
 		for _, secret := range []string{jupyterToken, hostToken, linkToken} {
@@ -117,9 +117,9 @@ exit 7
 				t.Fatalf("session script contains a secret literal:\n%s", script)
 			}
 		}
-		environment := linkspanEnvironment(test.modes, linkURL, linkToken, tunnelMetadata{ID: tunnelID, ClusterID: tunnelCluster}, hostToken)
+		environment := linkspanEnvironment(test.transports, linkURL, linkToken, devtunnelMetadata{ID: devtunnelID, ClusterID: devtunnelCluster}, hostToken)
 		if got := strings.Join(slices.Sorted(maps.Keys(environment)), " "); got != test.exported {
-			t.Fatalf("%v exports %q", test.modes, got)
+			t.Fatalf("%v exports %q", test.transports, got)
 		}
 		environment["JUPYTER_TOKEN"], environment["CS_CONTROL_PORT"] = jupyterToken, strconv.Itoa(int(ports(session.ID, session.Seq).Control))
 		command := exec.Command("bash")
@@ -133,10 +133,10 @@ exit 7
 		}
 		args := string(mustRead(t, argsLog))
 		if want := "--port\n" + environment["CS_CONTROL_PORT"] + "\n--tunnel-enable\n" + test.args + "--workflow\n" + sessionWorkflowPath(session) + "\n"; args != want {
-			t.Fatalf("%v argv = %q, want %q", test.modes, args, want)
+			t.Fatalf("%v argv = %q, want %q", test.transports, args, want)
 		}
 		if got := string(mustRead(t, filepath.Join(dir, "env"))); got != test.env {
-			t.Fatalf("%v Linkspan inherited %q", test.modes, got)
+			t.Fatalf("%v Linkspan inherited %q", test.transports, got)
 		}
 	}
 }
@@ -145,17 +145,17 @@ func TestTunnelModesAreValidatedAndCanonical(t *testing.T) {
 	request := newTestCreateRequest()
 	request.TunnelModes = nil
 	testutil.Check(t, validateCreate(&request))
-	if !slices.Equal(request.TunnelModes, []string{modeWebsocket}) {
-		t.Fatalf("omitted modes default to %v", request.TunnelModes)
+	if !slices.Equal(request.TunnelModes, []string{transportLink}) {
+		t.Fatalf("omitted transports default to %v", request.TunnelModes)
 	}
-	request.TunnelModes = []string{modeWebsocket, modeDevtunnel}
-	if testutil.Check(t, validateCreate(&request)); !slices.Equal(request.TunnelModes, []string{modeDevtunnel, modeWebsocket}) {
-		t.Fatalf("modes stored as %v", request.TunnelModes)
+	request.TunnelModes = []string{transportLink, transportDevtunnel}
+	if testutil.Check(t, validateCreate(&request)); !slices.Equal(request.TunnelModes, []string{transportDevtunnel, transportLink}) {
+		t.Fatalf("transports stored as %v", request.TunnelModes)
 	}
-	for _, modes := range [][]string{{}, {"ssh"}, {modeWebsocket, modeWebsocket}, {"Websocket"}} {
-		request.TunnelModes = modes
+	for _, transports := range [][]string{{}, {"ssh"}, {transportLink, transportLink}, {"Link"}} {
+		request.TunnelModes = transports
 		if err := validateCreate(&request); security.For(err).Code != "invalid_tunnel_modes" {
-			t.Fatalf("modes %q answered %v", modes, err)
+			t.Fatalf("transports %q answered %v", transports, err)
 		}
 	}
 }
@@ -187,7 +187,7 @@ func TestProvisionScriptGuardsItsArgumentVector(t *testing.T) {
 func TestStartRevalidatesExactScriptBeforeSubmit(t *testing.T) {
 	sshBin, scriptLog, commandLog := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
-	configureTestTunnel(t, &service)
+	configureTestDevtunnel(t, &service)
 	request := newTestCreateRequest()
 	request.ID = ""
 	validatedResult, err := service.Validate(context.Background(), testPrincipal, request)
@@ -204,10 +204,10 @@ func TestStartRevalidatesExactScriptBeforeSubmit(t *testing.T) {
 	submittedBasename := created.ID + "-" + strconv.Itoa(created.Seq)
 	validatedBasename := created.ID + "-0"
 	if !strings.Contains(string(submitted), submittedBasename) {
-		t.Fatalf("submitted script does not redirect to the created session's seq log:\n%s", submitted)
+		t.Fatalf("submitted script does not redirect to the created run's log:\n%s", submitted)
 	}
 	if !strings.Contains(string(validated), validatedBasename) {
-		t.Fatalf("validation script does not use the pre-seq placeholder log path:\n%s", validated)
+		t.Fatalf("validation script does not use the placeholder log path:\n%s", validated)
 	}
 	if strings.ReplaceAll(string(submitted), submittedBasename, "placeholder") != strings.ReplaceAll(string(validated), validatedBasename, "placeholder") {
 		t.Fatalf("submitted and validated scripts differ beyond the log path:\nsubmitted:\n%s\nvalidated:\n%s", submitted, validated)
@@ -228,7 +228,7 @@ func TestStartValidationFailureLeavesTheSessionUnlaunched(t *testing.T) {
 	sshBin, _, commandLog := fakeSSH(t)
 	service := fakeSSHService(t, sshBin)
 	store := service.Store
-	manager := configureTestTunnel(t, &service)
+	manager := configureTestDevtunnel(t, &service)
 	t.Setenv("FAKE_VALIDATION_FAIL", "1")
 	t.Setenv("FAKE_VALIDATION_STDERR", "sbatch: error: rejected")
 	_, err := defineAndStart(context.Background(), service, newTestCreateRequest())
@@ -247,7 +247,7 @@ func TestStartValidationFailureLeavesTheSessionUnlaunched(t *testing.T) {
 		t.Fatalf("failed validation submitted a job:\n%s", commands)
 	}
 	if len(manager.creates) != 0 {
-		t.Fatalf("failed validation created a tunnel: %#v", manager.creates)
+		t.Fatalf("failed validation created a Dev Tunnel: %#v", manager.creates)
 	}
 	if entries, err := os.ReadDir(service.CapabilityDir); err == nil && len(entries) != 0 {
 		t.Fatalf("failed validation wrote capabilities: %#v", entries)
@@ -256,11 +256,11 @@ func TestStartValidationFailureLeavesTheSessionUnlaunched(t *testing.T) {
 	}
 }
 
-func TestProvisionReportsAnExpiredSSHLoginAsLoginRequired(t *testing.T) {
+func TestProvisionReportsExpiredSSHAuthenticationAsRequired(t *testing.T) {
 	sshBin := filepath.Join(t.TempDir(), "ssh")
 	testutil.Check(t, os.WriteFile(sshBin, []byte("#!/bin/sh\n[ \"$1\" = -G ] && echo 'hostname delta' && exit 0\necho 'Permission denied (publickey,password).' >&2\nexit 255\n"), 0o700))
 	service := newTestService(t, ssh.Runner{SSHBin: sshBin, Timeout: 5 * time.Second}, Store{})
 	if code := security.For(service.provisionSession("delta", Session{SessionResponse: SessionResponse{ID: "s-000000000001"}}, "/home/u", "/home/u/.cybershuttle/bin/linkspan")).Code; code != "ssh_authentication_required" {
-		t.Fatalf("expired login provisioned as %q, want ssh_authentication_required", code)
+		t.Fatalf("expired SSH authentication provisioned as %q, want ssh_authentication_required", code)
 	}
 }
