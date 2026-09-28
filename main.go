@@ -44,15 +44,14 @@ func init() { security.UserAgent = "cs-plane/" + Version }
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, `Usage:
-  cs [global options] serve --oidc-client-id CLIENT_ID --custos-url URL --public-url URL \
+  cs [global options] serve --oidc-client-id CLIENT_ID --public-url URL \
       --allowed-origin ORIGIN [--allowed-origin ORIGIN ...]
   cs help
   cs version
 
-Identity (Custos sign-in):
+Identity (CILogon sign-in):
   --oidc-issuer ISSUER (default https://cilogon.org)
   --oidc-client-id CLIENT_ID (required)
-  --custos-url URL (required), e.g. https://custos.cybershuttle.org
   --public-url URL (required), the https URL browsers and session jobs reach cs at
   CS_OIDC_CLIENT_SECRET=SECRET (required, for the sign-in token exchange)
 
@@ -164,7 +163,6 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 	listenAddress := flags.String("listen", "127.0.0.1:8045", "loopback listen address")
 	oidcIssuer := flags.String("oidc-issuer", defaultOIDCIssuer, "OIDC issuer validated against its own discovery document and JWKS")
 	oidcClientID := flags.String("oidc-client-id", "", "OIDC client ID pinned as the ID token audience")
-	custosURL := flags.String("custos-url", "", "Custos base URL resolving a validated ID token to a user via GET {custos-url}/me")
 	publicURL := flags.String("public-url", "", "HTTPS URL clients and session jobs reach cs-plane at, such as https://api.example.edu")
 	var allowedOrigins []string
 	flags.Func("allowed-origin", "exact browser origin allowed to call the API (repeatable)", func(value string) error {
@@ -186,9 +184,6 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 	if strings.TrimSpace(*oidcClientID) == "" {
 		return errors.New("--oidc-client-id is required")
 	}
-	if strings.TrimSpace(*custosURL) == "" {
-		return errors.New("--custos-url is required")
-	}
 	if parsed, err := url.Parse(*publicURL); err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("--public-url must be an https URL without credentials, query or fragment")
 	}
@@ -206,7 +201,7 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 		return err
 	}
 	svcs.Origins = origins
-	authentication, err := oauth.NewService(*custosURL, *oidcIssuer, *oidcClientID, oidcClientSecret, origins, nil)
+	authentication, err := oauth.NewService(*oidcIssuer, *oidcClientID, oidcClientSecret, origins, nil)
 	if err != nil {
 		return err
 	}

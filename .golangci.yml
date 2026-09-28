@@ -34,10 +34,6 @@ linters:
       - path: internal/devtunnel/devtunnel\.go
         linters: [staticcheck]
         text: "ST1005"
-      # Custos is a proper noun, not the start of a generic error sentence.
-      - path: internal/identity/custos\.go
-        linters: [staticcheck]
-        text: "ST1005"
       # These are OAuth endpoint URLs, not literal credentials; the constant name says what it is reached
       # for, not a secret it holds (G101). The struct is JSON-marshaled only to be sealed with secretbox in
       # the same call, never written or logged in the clear (G117).

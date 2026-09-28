@@ -19,7 +19,7 @@ internal/router        route-table union, duplicate detection, method dispatch, 
 internal/security      API errors, strict JSON, Principal context, origin policy, protected files, bounded HTTP
                        clients, name predicates
 internal/db            Postgres connection: schema creation, format check, locking, transactions, unlocked reads
-internal/identity      OIDC discovery, validation and grants; Custos identity lookup
+internal/identity      OIDC discovery, validation and grants
 internal/ssh           bounded SSH execution, principal-scoped runners, PTY/WebSocket bridge, control masters
 internal/slurm         Slurm command construction, framed output parsing, scheduler value types
 internal/devtunnel     Dev Tunnels authorization and management protocols, wire types, URI policy
@@ -142,8 +142,7 @@ re-renders every SSH config. Files on disk are listed in the [README](../README.
   and link upgrades: a present `Origin` must be allowlisted; an absent one is a native client. `oauth/config` and
   `oauth/exchange` also require one.
 - **One bearer, one identity authority.** The ID token is validated against the issuer's discovery document and JWKS,
-  with exact issuer and audience pinned to the client ID. Custos `GET /me`, called with the same bearer over a client
-  that follows only same-origin redirects, names the principal under tenant `custos`.
+  with exact issuer and audience pinned to the client ID; its `sub` names the principal under tenant `cilogon`.
 - **Ownership.** Every session, log tail, run, SSH host, SSH key and Dev Tunnels account is scoped to the principal.
 - **No ambient authentication.** No cookies or static files; only the Jupyter proxy takes its token in the URL, as
   Jupyter clients require. Outside the bearer boundary are only the sign-in routes and the token routes: forward and

@@ -57,7 +57,7 @@ func newTestBroker(t *testing.T) (*Service, string) {
 
 func TestBrokerPollStoresSealedCredential(t *testing.T) {
 	broker, hostsDir := newTestBroker(t)
-	principal := security.Principal{Subject: "owner", Tenant: "custos"}
+	principal := security.Principal{Subject: "owner", Tenant: "cilogon"}
 	now := time.Now()
 	broker.now = func() time.Time { return now }
 	broker.authorizer = &fakeAuthorizer{
@@ -96,7 +96,7 @@ func TestBrokerPollStoresSealedCredential(t *testing.T) {
 
 func TestBrokerCredentialIsEmptyWithoutAnAccount(t *testing.T) {
 	broker, _ := newTestBroker(t)
-	credential, err := broker.Credential(context.Background(), security.Principal{Subject: "owner", Tenant: "custos"})
+	credential, err := broker.Credential(context.Background(), security.Principal{Subject: "owner", Tenant: "cilogon"})
 	if err != nil || credential != (devtunnel.Credential{}) {
 		t.Fatalf("credential = %#v, %v", credential, err)
 	}
@@ -105,7 +105,7 @@ func TestBrokerCredentialIsEmptyWithoutAnAccount(t *testing.T) {
 func TestBrokerSerializesPollAndDeleteAcrossBrokers(t *testing.T) {
 	broker, _ := newTestBroker(t)
 	other := newService(broker.stateDir, broker.principalDir, broker.box, nil)
-	principal := security.Principal{Subject: "owner", Tenant: "custos"}
+	principal := security.Principal{Subject: "owner", Tenant: "cilogon"}
 	now := time.Now()
 	broker.now = func() time.Time { return now }
 	started, release := make(chan struct{}), make(chan struct{})
@@ -133,7 +133,7 @@ func TestBrokerSerializesPollAndDeleteAcrossBrokers(t *testing.T) {
 
 func TestBrokerRefreshesExpiringCredential(t *testing.T) {
 	broker, _ := newTestBroker(t)
-	principal := security.Principal{Subject: "owner", Tenant: "custos"}
+	principal := security.Principal{Subject: "owner", Tenant: "cilogon"}
 	fixed := time.Now()
 	broker.now = func() time.Time { return fixed }
 	broker.authorizer = &fakeAuthorizer{
@@ -161,7 +161,7 @@ func TestRoutesAnswerStatusAndPollOverHTTP(t *testing.T) {
 	broker, _ := newTestBroker(t)
 	handler, err := router.New(broker.Routes())
 	testutil.Check(t, err)
-	principal := security.Principal{Subject: "owner", Tenant: "custos"}
+	principal := security.Principal{Subject: "owner", Tenant: "cilogon"}
 	ctx := security.WithPrincipal(context.Background(), principal)
 
 	status := testutil.Serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/devtunnels", nil).WithContext(ctx))

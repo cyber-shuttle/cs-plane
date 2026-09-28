@@ -42,7 +42,7 @@ func newTestSignIn(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler, *ht
 	t.Cleanup(server.Close)
 	origins, err := security.NewOrigins([]string{"https://workspace.example.edu"})
 	testutil.Check(t, err)
-	service, err := NewService(server.URL, server.URL, "the-client-id", "the-client-secret", origins, server.Client())
+	service, err := NewService(server.URL, "the-client-id", "the-client-secret", origins, server.Client())
 	testutil.Check(t, err)
 	routes, err := router.New(service.Routes())
 	testutil.Check(t, err)

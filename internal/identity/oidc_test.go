@@ -104,13 +104,15 @@ func testOIDC(t *testing.T, issuer string, client *http.Client) *OIDC {
 	return validator
 }
 
+const cilogonSubject = "http://cilogon.org/serverA/users/12345"
+
 func TestOIDCValidatorAcceptsValidIDTokens(t *testing.T) {
 	key := testRSAKey(t)
 	const kid = "identity-key"
 	server := oidcServer(t, map[string]http.HandlerFunc{"/keys": jwksRoute(t, kid, &key.PublicKey)})
 	validator := testOIDC(t, server.URL, server.Client())
 	claims := map[string]any{
-		"iss": server.URL, "aud": "client-id", "exp": time.Now().Unix() + 300, "sub": "owner-id",
+		"iss": server.URL, "aud": "client-id", "exp": time.Now().Unix() + 300, "sub": cilogonSubject,
 	}
 	for _, nbf := range []any{time.Now().Unix() - 1, nil} {
 		if nbf != nil {
@@ -118,7 +120,9 @@ func TestOIDCValidatorAcceptsValidIDTokens(t *testing.T) {
 		} else {
 			delete(claims, "nbf")
 		}
-		testutil.Check(t, validator.Validate(context.Background(), signIDToken(t, key, claims, map[string]any{"alg": "RS256", "kid": kid})))
+		subject, err := validator.Validate(context.Background(), signIDToken(t, key, claims, map[string]any{"alg": "RS256", "kid": kid}))
+		testutil.Check(t, err)
+		testutil.Equal(t, subject, cilogonSubject, "subject")
 	}
 }
 
@@ -153,7 +157,7 @@ func TestOIDCValidatorRejectsInvalidIdentityTokensWithoutLeaks(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			token := signIDToken(t, test.key, test.claims, test.header)
-			err := validator.Validate(context.Background(), token)
+			_, err := validator.Validate(context.Background(), token)
 			if err == nil || strings.Contains(err.Error(), token) {
 				t.Fatalf("error = %v", err)
 			}
@@ -194,7 +198,8 @@ func TestOIDCUnknownKIDFloodCoalescesRefreshWithoutBlockingKnownKey(t *testing.T
 	now := time.Now().Unix()
 	claims := map[string]any{"iss": server.URL, "aud": "client-id", "exp": now + 300, "nbf": now - 1, "sub": "owner"}
 	known := signIDToken(t, key, claims, map[string]any{"alg": "RS256", "kid": knownKID})
-	testutil.Check(t, validator.Validate(context.Background(), known))
+	_, err := validator.Validate(context.Background(), known)
+	testutil.Check(t, err)
 
 	const flood = 512
 	start := make(chan struct{})
@@ -206,7 +211,8 @@ func TestOIDCUnknownKIDFloodCoalescesRefreshWithoutBlockingKnownKey(t *testing.T
 		go func() {
 			defer workers.Done()
 			<-start
-			errors <- validator.Validate(context.Background(), token)
+			_, err := validator.Validate(context.Background(), token)
+			errors <- err
 		}()
 	}
 	close(start)
@@ -217,7 +223,10 @@ func TestOIDCUnknownKIDFloodCoalescesRefreshWithoutBlockingKnownKey(t *testing.T
 	}
 
 	knownDone := make(chan error, 1)
-	go func() { knownDone <- validator.Validate(context.Background(), known) }()
+	go func() {
+		_, err := validator.Validate(context.Background(), known)
+		knownDone <- err
+	}()
 	testutil.Within(t, knownDone, 200*time.Millisecond, "known-key validation was serialized behind OIDC refresh")
 	close(releaseRefresh)
 	workers.Wait()
@@ -234,7 +243,7 @@ func TestOIDCUnknownKIDFloodCoalescesRefreshWithoutBlockingKnownKey(t *testing.T
 	requestMu.Unlock()
 
 	cooldownToken := signIDToken(t, key, claims, map[string]any{"alg": "RS256", "kid": "random-after-flood"})
-	if err := validator.Validate(context.Background(), cooldownToken); err == nil {
+	if _, err := validator.Validate(context.Background(), cooldownToken); err == nil {
 		t.Fatal("unknown kid during cooldown was accepted")
 	}
 	requestMu.Lock()
@@ -265,7 +274,7 @@ func TestOIDCValidatorRejectsWrongJWKAlgorithmAndEncryptionUse(t *testing.T) {
 			now := time.Now().Unix()
 			claims := map[string]any{"iss": server.URL, "aud": "client-id", "exp": now + 300, "nbf": now - 1, "sub": "owner"}
 			token := signIDToken(t, key, claims, map[string]any{"alg": "RS256", "kid": "rejected-key"})
-			if err := validator.Validate(context.Background(), token); err == nil {
+			if _, err := validator.Validate(context.Background(), token); err == nil {
 				t.Fatalf("invalid JWK was accepted: %#v", jwk)
 			}
 		})

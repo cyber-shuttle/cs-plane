@@ -7,23 +7,25 @@ Notable changes to cs-plane. The format follows
 
 The next release is 0.4.0.
 
-Upgrading from 0.3.0: stored sessions and runs carry `websocket` and `launcher` and are not migrated, and stored SSH
-hosts carry `name`. Stop every session first. With cs-plane stopped, run against its schema (here `cs_plane`):
+Upgrading from 0.3.0: callers are now identified by their CILogon identity, and nothing stored under the old
+principals is migrated. Stop every session first. With cs-plane stopped, run against its schema (here `cs_plane`):
 
 ```sql
 DELETE FROM cs_plane.runs;
 DELETE FROM cs_plane.sessions;
-UPDATE cs_plane.ssh_hosts SET payload = ((payload::jsonb - 'name') || jsonb_build_object('alias', host))::text;
+DELETE FROM cs_plane.ssh_hosts;
+DELETE FROM cs_plane.ssh_keys;
 ```
 
-Then delete the per-run token files and the old sealed Dev Tunnels account files under the state directory:
+Then delete the per-run token files, every per-principal directory and lock, and the old Dev Tunnels account files
+under the state directory:
 
 ```sh
 cd ~/.cybershuttle/control
-rm -f credentials/*.token hosts/*/tunnel-link tunnel-link.key .tunnel-link-*.lock
+rm -rf credentials/*.token hosts/* .devtunnels-account-*.lock tunnel-link.key .tunnel-link-*.lock
 ```
 
-Each user connects their Dev Tunnels account again.
+Each user re-adds their SSH hosts, SSH keys and Dev Tunnels account.
 
 ### Security
 
@@ -42,6 +44,7 @@ Each user connects their Dev Tunnels account again.
 - The transport value `websocket` is now `link`: `tunnelModes` takes `link` and `devtunnel` and defaults to
   `["link"]`, and Linkspan launches with `--tunnel-mode link` and `--tunnel-link-args "--url $CS_LINK_URL"`. Requires
   Linkspan 0.22.0 or newer.
+- Callers are identified by their CILogon identity: the principal is the ID token's `sub` under tenant `cilogon`.
 - `launcher` is now `platform` on the session record, with the values `jupyterlab` (cs-plane started the run) and
   `vscode` (a client attached it).
 - SSH host records carry `alias` instead of `name`, sessions and runs carry `alias` instead of `sshHost`, and the
@@ -58,6 +61,7 @@ Each user connects their Dev Tunnels account again.
 ### Removed
 
 - `POST /api/v1/sessions/{id}/runs`, which only moved CS Bridge's local history into cs-plane.
+- Custos identity resolution, the `--custos-url` flag and the `identity_not_linked` error.
 
 ### Fixed
 

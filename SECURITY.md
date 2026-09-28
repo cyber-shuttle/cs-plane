@@ -18,6 +18,6 @@ advisory unless you decline.
 cs-plane is a shared service behind a TLS reverse proxy. A useful report shows one of the
 [trust boundaries](docs/ARCHITECTURE.md#trust-boundaries) failing.
 
-Out of scope: findings that assume control of the user's account or their CILogon, Custos or Dev Tunnels
-credentials, and vulnerabilities in Jupyter Server, Dev Tunnels, CILogon, Custos or
-[Linkspan](https://github.com/cyber-shuttle/linkspan), which have their own channels.
+Out of scope: findings that assume control of the user's account or their CILogon or Dev Tunnels credentials, and
+vulnerabilities in Jupyter Server, Dev Tunnels, CILogon or [Linkspan](https://github.com/cyber-shuttle/linkspan), which
+have their own channels.

@@ -1,18 +1,15 @@
 // OAuth middleware applies the shared exact-origin policy with CORS headers and establishes caller identity from one
 // bearer channel; the browser-only sign-in routes also require an Origin. Preflight and dispatch read methods from the
 // same route registry. Browser WebSockets carry the same token through the versioned subprotocol because their API
-// cannot set Authorization; classified identity failures retain their wire meaning rather than being flattened into
-// generic authentication errors.
+// cannot set Authorization. Any identity failure answers 401 unauthorized.
 package oauth
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
 
-	"github.com/cyber-shuttle/cs-plane/internal/identity"
 	"github.com/cyber-shuttle/cs-plane/internal/router"
 	"github.com/cyber-shuttle/cs-plane/internal/security"
 	"github.com/cyber-shuttle/cs-plane/internal/ssh"
@@ -190,33 +187,18 @@ func (b *oauthBoundary) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	principal, err := b.validate(authenticated.Context(), token)
 	if err != nil {
-		if classified := security.For(err); classified.Code != "internal_error" {
-			if classified.Status == http.StatusUnauthorized {
-				writer.Header().Set("WWW-Authenticate", "Bearer")
-			}
-			security.WriteError(writer, classified)
-		} else {
-			writeUnauthorized(writer)
-		}
+		writeUnauthorized(writer)
 		return
 	}
 	ctx := security.WithPrincipal(authenticated.Context(), principal)
 	b.next.ServeHTTP(writer, authenticated.WithContext(ctx))
 }
 
-const custosTenant = "custos"
+// cilogonTenant scopes every principal: the issuer is pinned, so its subjects share one namespace.
+const cilogonTenant = "cilogon"
 
-// validate resolves a bearer both channels have already checked for credential shape to its Custos principal.
+// validate resolves a bearer both channels have already checked for credential shape to its CILogon principal.
 func (s *Service) validate(ctx context.Context, token string) (security.Principal, error) {
-	if err := s.oidc.Validate(ctx, token); err != nil {
-		return security.Principal{}, err
-	}
-	userID, err := s.custos.Resolve(ctx, token)
-	if errors.Is(err, identity.ErrIdentityNotLinked) {
-		return security.Principal{}, security.New("identity_not_linked", "OIDC identity is not linked to a Custos user", http.StatusUnauthorized)
-	}
-	if errors.Is(err, identity.ErrIdentityUnrecognized) {
-		return security.Principal{}, security.New("identity_not_linked", "Custos did not recognize this identity", http.StatusUnauthorized)
-	}
-	return security.Principal{Subject: userID, Tenant: custosTenant}, err
+	subject, err := s.oidc.Validate(ctx, token)
+	return security.Principal{Subject: subject, Tenant: cilogonTenant}, err
 }

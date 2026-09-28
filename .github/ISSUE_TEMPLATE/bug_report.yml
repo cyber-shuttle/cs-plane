@@ -20,7 +20,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. cs serve --oidc-client-id ... --custos-url ... --allowed-origin ...
+        1. cs serve --oidc-client-id ... --public-url ... --allowed-origin ...
         2. POST /api/v1/sessions with ...
         3. ...
     validations:
@@ -51,7 +51,7 @@ body:
     id: invocation
     attributes:
       label: How you started cs-plane
-      description: The `cs serve` command line, with the tenant ID replaced.
+      description: The `cs serve` command line, with the client ID replaced.
       render: shell
   - type: textarea
     id: cluster

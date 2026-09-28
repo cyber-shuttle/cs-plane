@@ -38,7 +38,7 @@ func testServices(t *testing.T, stateDir string) services {
 
 func TestServeValidatesOriginsBeforeListening(t *testing.T) {
 	t.Setenv("CS_OIDC_CLIENT_SECRET", "the-client-secret")
-	oidcArgs := []string{"--oidc-client-id", "the-client-id", "--custos-url", "https://custos.example.edu", "--public-url", "https://plane.example.edu"}
+	oidcArgs := []string{"--oidc-client-id", "the-client-id", "--public-url", "https://plane.example.edu"}
 	for _, args := range [][]string{
 		oidcArgs,
 		append(append([]string{}, oidcArgs...), "--public-url", "http://plane.example.edu", "--allowed-origin", "https://workspace.example"),
@@ -75,7 +75,7 @@ func TestServeRefusesIncompatibleStateBeforeCreatingCredentials(t *testing.T) {
 	testutil.Check(t, database.Close())
 
 	svcs := testServices(t, stateDir)
-	args := []string{"--oidc-client-id", "the-client-id", "--custos-url", "https://custos.example.edu", "--public-url", "https://plane.example.edu", "--allowed-origin", "https://workspace.example.edu"}
+	args := []string{"--oidc-client-id", "the-client-id", "--public-url", "https://plane.example.edu", "--allowed-origin", "https://workspace.example.edu"}
 	listen := func(string, string) (net.Listener, error) {
 		t.Fatal("serve listened with an incompatible state database")
 		return nil, nil
@@ -94,7 +94,7 @@ func TestServeComponentsAlwaysApplyOAuthBoundary(t *testing.T) {
 	svcs.DatabaseURL = testutil.Database(t)
 	origins, err := security.NewOrigins([]string{allowedOrigin})
 	testutil.Check(t, err)
-	authentication, err := oauth.NewService("https://custos.example.edu", defaultOIDCIssuer, "the-client-id", "the-client-secret", origins, nil)
+	authentication, err := oauth.NewService(defaultOIDCIssuer, "the-client-id", "the-client-secret", origins, nil)
 	testutil.Check(t, err)
 	components, err := newServeComponents(svcs, authentication)
 	testutil.Check(t, err)
