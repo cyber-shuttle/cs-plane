@@ -464,13 +464,13 @@ has neither a link nor a Dev Tunnel is `409 session_access_unavailable`, with th
 
 ### `GET /api/v1/sessions/{id}/forward/{port}` → 101
 
-A WebSocket carrying one TCP connection, as binary frames, to the port a Linkspan task serves in the session: the
-SSH server `POST .../ssh` started, Jupyter Server, or any other. It takes no bearer; the client offers exactly
+A WebSocket carrying one TCP connection, as binary frames, to a port Linkspan serves in the session: the SSH server
+`POST .../ssh` started, Jupyter Server, its control port, or any other. It takes no bearer; the client offers exactly
 `cybershuttle.v1` then `capability.<token>`, with `token` from `/access`.
 
 | Refusal | Answer |
 | --- | --- |
-| Malformed or zero port, or Linkspan's control port | `404 not_found` |
+| Malformed or zero port | `404 not_found` |
 | Other subprotocols, wrong token, session not `READY` | `401` |
 | Foreign `Origin` | `403 origin_not_allowed` |
 | Port unreachable | `502 upstream_unavailable` |

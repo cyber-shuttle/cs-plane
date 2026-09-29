@@ -158,7 +158,7 @@ re-renders every SSH config. Files on disk are listed in the [README](../README.
 - **Redaction.** Dev Tunnels OAuth, host, connect, link and Jupyter tokens are redacted from errors, logs, scripts and
   responses. The Jupyter token appears only in the job environment and the access response; the link token only in the
   job environment and, for a client-launched run, the `attach` response.
-- **Proxying.** cs-plane forwards only to ports a Linkspan task serves, never the control port, and opens no port
-  forward on the SSH host.
+- **Proxying.** cs-plane forwards only to ports Linkspan serves and opens no port forward on the SSH host. The Jupyter
+  token that opens a forward already grants code execution as the user, so Linkspan's API adds no power.
 - **Shared nodes.** Jobs are not `--exclusive`; any user on the compute node can reach Linkspan's loopback control port
   ([Linkspan security model](https://github.com/cyber-shuttle/linkspan/blob/main/SECURITY.md#security-model)).

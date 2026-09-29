@@ -172,6 +172,14 @@ func TestTheLinkCarriesJupyterSSHAndUsageOnDemand(t *testing.T) {
 		t.Fatalf("forwarded %q %v", data, err)
 	}
 	_ = forward.Close()
+	api, response, err := dialer.Dial(wsURL(plane, "/api/v1/sessions/"+session.ID+"/forward/"+strconv.Itoa(int(numbers.Control))), nil)
+	testutil.Check(t, err)
+	_ = response.Body.Close()
+	testutil.Check(t, api.WriteMessage(websocket.BinaryMessage, []byte("GET /api/v1/usage HTTP/1.0\r\n\r\n")))
+	if _, data, err := api.ReadMessage(); err != nil || !strings.HasPrefix(string(data), "HTTP/1.0 200") {
+		t.Fatalf("control port forward = %q %v", data, err)
+	}
+	_ = api.Close()
 	select {
 	case <-sshdEnded:
 	case <-time.After(3 * time.Second):
@@ -210,7 +218,7 @@ func TestTheLinkRefusesAWrongTokenAndAnUnservedPort(t *testing.T) {
 		t.Fatalf("a refused port = %v", err)
 	}
 	capability := "cybershuttle.v1, capability." + testJupyterToken
-	for _, port := range []string{"0", "65536", "x", strconv.Itoa(int(ports(session.ID, session.Seq).Control))} {
+	for _, port := range []string{"0", "65536", "x"} {
 		if status := refusedWith(capability, "/api/v1/sessions/"+session.ID+"/forward/"+port); status != http.StatusNotFound {
 			t.Fatalf("forward to port %s answered %d", port, status)
 		}

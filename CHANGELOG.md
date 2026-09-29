@@ -5,6 +5,11 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `GET /api/v1/sessions/{id}/forward/{port}` also forwards to Linkspan's control port, under the same capability, so
+  a client that launched the job uses Linkspan's API as over a Dev Tunnel.
+
 ## [0.4.0] - 2026-09-28
 
 Upgrading from 0.3.0: callers are now identified by their CILogon identity, and nothing stored under the old
