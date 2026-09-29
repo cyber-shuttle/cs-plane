@@ -3,8 +3,7 @@
 // in two bytes and Linkspan answers 1 carried or 0 refused. A Dev Tunnel, through Linkspan's forward route,
 // is the fallback. HTTP into a job dials the address <id>.<seq>.session, which pools connections per run. Forward
 // and the Jupyter proxy sit outside the bearer boundary under the shared origin policy, opened by the Jupyter token
-// compared in constant time; a CORS preflight passes through. Forward never reaches Linkspan's control port. A link
-// for the current run makes it READY.
+// compared in constant time; a CORS preflight passes through. A link for the current run makes it READY.
 package session
 
 import (
@@ -120,7 +119,7 @@ func (s Service) Forward(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	port, err := strconv.ParseUint(request.PathValue("port"), 10, 16)
-	if err != nil || port == 0 || uint16(port) == ports(session.ID, session.Seq).Control {
+	if err != nil || port == 0 {
 		security.WriteError(writer, router.ErrNotFound)
 		return
 	}
