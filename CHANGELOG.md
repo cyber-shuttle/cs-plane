@@ -5,6 +5,8 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-29
+
 ### Changed
 
 - `GET /api/v1/sessions/{id}/forward/{port}` also forwards to Linkspan's control port, under the same capability, so
@@ -105,6 +107,7 @@ Each user re-adds their SSH hosts, SSH keys and Dev Tunnels account.
 - `GET /telemetry`: finished runs per seq with Slurm accounting.
 - State in a Postgres schema named by `CS_DATABASE_URL`, with sqlc-generated queries.
 
-[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.4.0
 [0.3.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.3.0
