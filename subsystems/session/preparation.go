@@ -23,7 +23,7 @@ import (
 	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 )
 
-type preparedSession struct {
+type sessionPlan struct {
 	session  Session
 	script   string
 	home     string
@@ -40,11 +40,11 @@ func (s Service) Validate(ctx context.Context, principal security.Principal, req
 	if _, err := s.devtunnelCredential(ctx, principal, request.TunnelModes); err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareSession(ctx, request)
+	plan, err := s.planSession(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	result, err := slurm.Check(ctx, s.runner, prepared.session.Alias, prepared.script)
+	result, err := slurm.Check(ctx, s.runner, plan.session.Alias, plan.script)
 	if err != nil {
 		return nil, err
 	}
@@ -53,8 +53,8 @@ func (s Service) Validate(ctx context.Context, principal security.Principal, req
 		status = "PASSED"
 	}
 	return &ValidationResult{
-		SessionID: prepared.session.ID,
-		Script:    prepared.script,
+		SessionID: plan.session.ID,
+		Script:    plan.script,
 		Status:    status,
 		Message:   validationMessage(result),
 		Stdout:    strings.TrimSpace(result.Stdout),
@@ -429,29 +429,25 @@ func (s Service) linkURL(id string) string {
 	return "ws" + strings.TrimPrefix(s.PublicURL, "http") + "/api/v1/sessions/" + id + "/link"
 }
 
-func (s Service) submitSessionScript(ctx context.Context, alias string, session Session, script string, capability sessionCapability, hostToken string) (string, error) {
-	environment := linkspanEnvironment(session.TunnelModes, s.linkURL(session.ID), capability.LinkToken, session.Devtunnel, hostToken)
-	environment["JUPYTER_TOKEN"], environment["CS_CONTROL_PORT"] = capability.JupyterToken, strconv.Itoa(int(ports(session.ID, session.Seq).Control))
-	return slurm.Submit(ctx, s.runner, alias, slurm.SubmitRequest{JobName: session.JobName, Script: script, Environment: environment})
+func (s Service) submitSessionScript(ctx context.Context, session Session, script string, tokens runTokens, hostToken string) (string, error) {
+	environment := linkspanEnvironment(session.TunnelModes, s.linkURL(session.ID), tokens.LinkToken, session.Devtunnel, hostToken)
+	environment["JUPYTER_TOKEN"], environment["CS_CONTROL_PORT"] = tokens.JupyterToken, strconv.Itoa(int(ports(session.ID, session.Seq).Control))
+	return slurm.Submit(ctx, s.runner, session.Alias, slurm.SubmitRequest{JobName: session.JobName, Script: script, Environment: environment})
 }
 
-func (s Service) provisionSession(alias string, session Session, home, linkspan string) error {
+func (s Service) provisionSession(ctx context.Context, session Session, home, linkspan string) error {
+	alias := session.Alias
 	key := s.runner.ConfigPath + "\x00" + alias
 	if _, busy := s.hostPreparations.LoadOrStore(key, true); busy {
 		return security.New("session_provisioning_in_progress",
 			"The session environment on "+alias+" is still being prepared. Try again in a moment.", http.StatusConflict)
 	}
 	defer s.hostPreparations.Delete(key)
-	operationCtx, done, err := s.beginOperation()
-	if err != nil {
-		return err
-	}
-	defer done()
-	ctx, cancel := context.WithTimeout(operationCtx, provisionTimeout)
+	ctx, cancel := context.WithTimeout(ctx, provisionTimeout)
 	defer cancel()
 	s.sessionStatus(session.ID, "Preparing the session environment")
 	document := base64.StdEncoding.EncodeToString([]byte(sessionWorkflow(session)))
-	outText, errText, runErr := s.runner.RunOutput(ctx, alias, provisionTimeout, strings.NewReader(provisionScript),
+	outText, errText, runErr := s.runner.RunOutput(ctx, alias, strings.NewReader(provisionScript),
 		"sh", "-s", "--", "cs-provision", home, linkspan, sessionWorkflowPath(session), document)
 	report := provisionOutcome(outText)
 	if runErr != nil {
@@ -473,7 +469,7 @@ func (s Service) provisionSession(alias string, session Session, home, linkspan 
 	return nil
 }
 
-func (s Service) prepareSession(ctx context.Context, request CreateRequest) (_ *preparedSession, resultErr error) {
+func (s Service) planSession(ctx context.Context, request CreateRequest) (_ *sessionPlan, resultErr error) {
 	s.sessionStatus(request.ID, "Preparing session")
 	defer func() {
 		if resultErr != nil {
@@ -511,7 +507,7 @@ func (s Service) prepareSession(ctx context.Context, request CreateRequest) (_ *
 	}
 	s.sessionStatus(request.ID, "Session preparation complete")
 	linkspan := resolveRemoteExecutable(s.LinkspanPath, resource.HomeDir)
-	return &preparedSession{session: session, script: buildScript(session, linkspan), home: resource.HomeDir, linkspan: linkspan}, nil
+	return &sessionPlan{session: session, script: buildScript(session, linkspan), home: resource.HomeDir, linkspan: linkspan}, nil
 }
 
 func (s Service) resolveRootFolder(ctx context.Context, alias, home, expression string) (string, error) {

@@ -172,12 +172,12 @@ func TestWalltimeExpiryWithNoObservationDeletesTheCredential(t *testing.T) {
 	service, _, _ := reconciliationService(t)
 	session := runningSession(time.Now().Add(-4 * time.Hour))
 	setTestSessionMetadata(&session)
-	testutil.Check(t, putCapability(service.CapabilityDir, session.ID, session.Seq, defaultSessionCapability()))
+	testutil.Check(t, putRunTokens(service.TokenDir, session.ID, session.Seq, defaultRunTokens()))
 	putSessions(t, service, session)
 	t.Setenv("FAKE_STATUS_FAIL", "1")
 	testutil.Check(t, service.reconcileAll(context.Background()))
-	if _, err := getCapability(service.CapabilityDir, session.ID, session.Seq); err == nil {
-		t.Fatal("a session retired past its walltime with no observation kept its run's capability")
+	if _, err := getRunTokens(service.TokenDir, session.ID, session.Seq); err == nil {
+		t.Fatal("a session retired past its walltime with no observation kept its run's tokens")
 	}
 }
 

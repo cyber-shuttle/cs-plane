@@ -14,14 +14,13 @@ import (
 
 	"github.com/cyber-shuttle/cs-plane/internal/router"
 	"github.com/cyber-shuttle/cs-plane/internal/security"
-	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 	"github.com/cyber-shuttle/cs-plane/internal/testutil"
 )
 
 var testPrincipal = security.Principal{Subject: "test-owner", Tenant: "test-tenant"}
 
 func browserWebSocketProtocols(token string) string {
-	return ssh.ControlWebSocketProtocol + ", " + webSocketBearerPrefix + base64.RawURLEncoding.EncodeToString([]byte(token))
+	return security.WebSocketProtocol + ", " + webSocketBearerPrefix + base64.RawURLEncoding.EncodeToString([]byte(token))
 }
 
 func testOAuthBoundary(t *testing.T, next http.Handler, validator func(context.Context, string) (security.Principal, error), allowedOrigins []string) http.Handler {
@@ -34,7 +33,9 @@ func testOAuthBoundary(t *testing.T, next http.Handler, validator func(context.C
 		"/api/v1/hosts/{alias}/ssh": {http.MethodGet: forward},
 	})
 	testutil.Check(t, err)
-	return (&Service{validator: validator, origins: origins}).Protect(registry)
+	return (&Service{validator: validator, origins: origins}).Protect(registry, func(request *http.Request) bool {
+		return request.URL.Path == "/api/v1/hosts/delta/ssh"
+	})
 }
 
 func browserUpgradeRequest(token string) *http.Request {
@@ -97,7 +98,7 @@ func TestOAuthBoundaryWebSocketSubprotocolBearer(t *testing.T) {
 		if r.Header.Get("Authorization") != "" {
 			t.Fatal("Authorization reached the inner handler of a subprotocol-authenticated WebSocket")
 		}
-		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != ssh.ControlWebSocketProtocol {
+		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != security.WebSocketProtocol {
 			t.Fatalf("inner protocols = %q", got)
 		}
 		if strings.Contains(r.URL.String(), token) || strings.Contains(r.URL.String(), base64.RawURLEncoding.EncodeToString([]byte(token))) {
@@ -179,7 +180,7 @@ func TestOAuthBoundaryRejectsMalformedCredentials(t *testing.T) {
 		}(),
 		"websocket without bearer": func() *http.Request {
 			r := browserUpgradeRequest("t")
-			r.Header.Set("Sec-WebSocket-Protocol", ssh.ControlWebSocketProtocol+", other."+base64.RawURLEncoding.EncodeToString([]byte("t")))
+			r.Header.Set("Sec-WebSocket-Protocol", security.WebSocketProtocol+", other."+base64.RawURLEncoding.EncodeToString([]byte("t")))
 			return r
 		}(),
 		"websocket extra protocol": func() *http.Request {

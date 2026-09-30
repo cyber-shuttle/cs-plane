@@ -57,7 +57,7 @@ func TestDevTunnelCreateRequestsScopedTokensAndAcceptsAdditiveFields(t *testing.
 		_, _ = io.WriteString(w, realisticTunnelResponse(id, "host-secret", "connect-secret"))
 	}))
 	defer server.Close()
-	record, err := testClient(t, server.URL, server.Client()).Create(context.Background(), CreateRequest{OAuthToken: "oauth", TunnelID: id, DurationSeconds: 3600})
+	record, err := testClient(t, server.URL, server.Client()).Create(context.Background(), CreateRequest{Credential: Credential{Token: "oauth"}, ID: id, DurationSeconds: 3600})
 	testutil.Check(t, err)
 	if record.ID != id || record.ClusterID != "use" || record.HostToken != "host-secret" || record.ConnectToken != "connect-secret" || record.ExpiresAt.IsZero() {
 		t.Fatalf("record = %#v", record)
@@ -79,7 +79,7 @@ func TestDevTunnelRejectsMalformedUsedFields(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, response) }))
 			defer server.Close()
-			if _, err := testClient(t, server.URL, server.Client()).Get(context.Background(), GetRequest{ConnectToken: "connect", TunnelID: "tunnel-123", ClusterID: "use"}); err == nil {
+			if _, err := testClient(t, server.URL, server.Client()).Get(context.Background(), GetRequest{ConnectToken: "connect", ID: "tunnel-123", ClusterID: "use"}); err == nil {
 				t.Fatal("malformed response accepted")
 			}
 		})
@@ -118,7 +118,7 @@ func TestDevTunnelForwardsAuthorizationOnlyAcrossManagementHosts(t *testing.T) {
 	})}
 	manager, err := NewClient("https://global.rel.tunnels.api.visualstudio.com", httpClient)
 	testutil.Check(t, err)
-	if _, err := manager.Create(context.Background(), CreateRequest{OAuthToken: "oauth", TunnelID: id, DurationSeconds: 3600}); err != nil {
+	if _, err := manager.Create(context.Background(), CreateRequest{Credential: Credential{Token: "oauth"}, ID: id, DurationSeconds: 3600}); err != nil {
 		t.Fatal(err)
 	}
 	if !redirected {

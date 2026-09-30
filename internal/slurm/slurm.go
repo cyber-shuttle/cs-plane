@@ -180,9 +180,10 @@ func parseAccounts(output string) []string {
 	return slices.Compact(accounts)
 }
 
-func parseGRES(value string) ([]GRES, error) {
+// parseGRES skips entries it cannot count, such as tmpdisk:100G.
+func parseGRES(value string) []GRES {
 	if value == "" || value == "(null)" {
-		return []GRES{}, nil
+		return []GRES{}
 	}
 	var entries []string
 	start, depth := 0, 0
@@ -204,12 +205,12 @@ func parseGRES(value string) ([]GRES, error) {
 	for _, entry := range entries {
 		match := gresEntry.FindStringSubmatch(entry)
 		if match == nil {
-			return nil, fmt.Errorf("invalid GRES entry: %q", entry)
+			continue
 		}
 		count, _ := strconv.Atoi(match[2])
 		result = append(result, GRES{Name: match[1], Count: count})
 	}
-	return result, nil
+	return result
 }
 
 func parsePartitions(output string) ([]Partition, error) {
@@ -227,12 +228,8 @@ func parsePartitions(output string) ([]Partition, error) {
 		if cpuErr != nil || memoryErr != nil {
 			return nil, fmt.Errorf("invalid capacity in sinfo line: %q", line)
 		}
-		resources, err := parseGRES(strings.TrimSpace(parts[3]))
-		if err != nil {
-			return nil, err
-		}
 		partitions = append(partitions, Partition{
-			Name: strings.TrimSuffix(strings.TrimSpace(parts[0]), "*"), CPUCount: cpus, MemoryMB: memory, GRES: resources,
+			Name: strings.TrimSuffix(strings.TrimSpace(parts[0]), "*"), CPUCount: cpus, MemoryMB: memory, GRES: parseGRES(strings.TrimSpace(parts[3])),
 		})
 	}
 	return partitions, nil
@@ -274,7 +271,7 @@ func parseDiscovery(output string) (Discovery, error) {
 func Discover(ctx context.Context, runner ssh.Runner, alias string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, runner.EffectiveTimeout())
 	defer cancel()
-	stdout, stderr, runErr := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(discoveryScript), "sh", "-s")
+	stdout, stderr, runErr := runner.RunOutput(ctx, alias, strings.NewReader(discoveryScript), "sh", "-s")
 	if runErr != nil && (errors.Is(runErr, context.DeadlineExceeded) || ssh.AuthenticationFailure(stderr)) {
 		return Discovery{}, ssh.ClassifyFailure(alias, stderr, runErr)
 	}
@@ -293,7 +290,9 @@ func Discover(ctx context.Context, runner ssh.Runner, alias string) (Discovery, 
 }
 
 func Check(ctx context.Context, runner ssh.Runner, alias, script string) (CheckResult, error) {
-	stdout, stderr, err := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(script), "sbatch", "--test-only")
+	ctx, cancel := context.WithTimeout(ctx, runner.EffectiveTimeout())
+	defer cancel()
+	stdout, stderr, err := runner.RunOutput(ctx, alias, strings.NewReader(script), "sbatch", "--test-only")
 	if !ssh.AmbiguousExit(err) {
 		return CheckResult{Stdout: stdout, Stderr: stderr, Passed: err == nil}, nil
 	}
@@ -320,7 +319,9 @@ func Submit(ctx context.Context, runner ssh.Runner, alias string, request Submit
 		return "", err
 	}
 	secrets := slices.Collect(maps.Values(request.Environment))
-	stdout, stderr, runErr := runner.RunOutput(ctx, alias, runner.EffectiveTimeout(), strings.NewReader(program),
+	ctx, cancel := context.WithTimeout(ctx, runner.EffectiveTimeout())
+	defer cancel()
+	stdout, stderr, runErr := runner.RunOutput(ctx, alias, strings.NewReader(program),
 		"sh", "-s", "--", "cs-submit", request.JobName)
 	if runErr != nil {
 		cause := security.Redact(fmt.Sprintf("submit %s failed", request.JobName), errors.New(ssh.FailureMessage(stderr, runErr)), secrets...)
@@ -339,11 +340,11 @@ func normalizeState(raw string) State {
 		return Unknown
 	}
 	switch strings.TrimSuffix(strings.ToUpper(fields[0]), "+") {
-	case "PENDING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD", "SUSPENDED":
+	case "PENDING", "REQUEUED", "REQUEUE_FED", "REQUEUE_HOLD", "SUSPENDED", "STOPPED": // SUSPENDED and STOPPED keep their nodes
 		return Pending
 	case "RUNNING", "CONFIGURING", "COMPLETING", "RESIZING", "SIGNALING", "STAGE_OUT":
 		return Active
-	case "COMPLETED", "CANCELLED", "STOPPED":
+	case "COMPLETED", "CANCELLED":
 		return Stopped
 	case "TIMEOUT":
 		return Expired

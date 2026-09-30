@@ -366,7 +366,7 @@ func TestDeleteClearsATerminalSessionAndItsCredential(t *testing.T) {
 	setTestSessionMetadata(&session)
 	session.State = "FAILED"
 	putSessions(t, service, session)
-	testutil.Check(t, putCapability(service.CapabilityDir, session.ID, session.Seq, defaultSessionCapability()))
+	testutil.Check(t, putRunTokens(service.TokenDir, session.ID, session.Seq, defaultRunTokens()))
 	service.logs.append(session.ID, "starting", service.utcNow())
 
 	deleted, err := service.Delete(testPrincipal, session.ID)
@@ -380,8 +380,8 @@ func TestDeleteClearsATerminalSessionAndItsCredential(t *testing.T) {
 			t.Fatalf("deleted session is still listed: %#v", remaining)
 		}
 	}
-	if _, err := getCapability(service.CapabilityDir, session.ID, session.Seq); err == nil {
-		t.Fatal("delete left the run's capability on disk")
+	if _, err := getRunTokens(service.TokenDir, session.ID, session.Seq); err == nil {
+		t.Fatal("delete left the run's tokens on disk")
 	}
 	if _, ok := service.logs.tail(session.ID); ok {
 		t.Fatal("delete left the session log tail in memory")
@@ -504,7 +504,7 @@ func (m *testDevtunnelManager) Create(_ context.Context, request devtunnel.Creat
 	if m.createErr != nil {
 		return devtunnel.Record{}, m.createErr
 	}
-	return devtunnel.Record{ID: request.TunnelID, ClusterID: "use", ConnectToken: testConnectToken, HostToken: testHostToken, ExpiresAt: time.Now().UTC().Add(time.Duration(request.DurationSeconds) * time.Second)}, nil
+	return devtunnel.Record{ID: request.ID, ClusterID: "use", ConnectToken: testConnectToken, HostToken: testHostToken, ExpiresAt: time.Now().UTC().Add(time.Duration(request.DurationSeconds) * time.Second)}, nil
 }
 
 func (m *testDevtunnelManager) Get(context.Context, devtunnel.GetRequest) (devtunnel.Record, error) {
@@ -534,7 +534,7 @@ func configureTestDevtunnel(t *testing.T, service *Service) *testDevtunnelManage
 	manager := &testDevtunnelManager{}
 	service.DevtunnelManager = manager
 	service.DevtunnelCredentials = newTestDevtunnelsAccounts()
-	service.CapabilityDir = t.TempDir() + "/session-capabilities"
+	service.TokenDir = t.TempDir() + "/run-tokens"
 	return manager
 }
 
@@ -715,7 +715,7 @@ func TestStartRunsTheFinishedSessionOnTheSameSession(t *testing.T) {
 	if !started.CreatedAt.Equal(terminal.CreatedAt) || !started.UpdatedAt.After(terminal.UpdatedAt) {
 		t.Fatalf("the next run must keep the session's creation time and move it forward: %#v", started.SessionResponse)
 	}
-	if len(devtunnels.deletes) != 1 || devtunnels.deletes[0].TunnelID != created.ID+"-"+strconv.Itoa(terminal.Seq) {
+	if len(devtunnels.deletes) != 1 || devtunnels.deletes[0].ID != created.ID+"-"+strconv.Itoa(terminal.Seq) {
 		t.Fatalf("the finished run's Dev Tunnel was not released: %#v", devtunnels.deletes)
 	}
 }
@@ -857,11 +857,11 @@ func TestAttachAdmitsAClientLaunchedRunThatNeverReachesTheSchedulerOrDevTunnels(
 	if _, err := service.dial(context.Background(), Session{SessionResponse: attached.Session}, 1); !errors.Is(err, errNoRoute) {
 		t.Fatalf("a session with no link and no Dev Tunnel dialed something: %v", err)
 	}
-	capability, err := getCapability(service.CapabilityDir, session.ID, 1)
-	if err != nil || attached.Link.Token != capability.LinkToken || attached.Link.URL != "wss://plane.example.edu/api/v1/sessions/"+session.ID+"/link" {
-		t.Fatalf("link = %#v, capability %v", attached.Link, err)
+	tokens, err := getRunTokens(service.TokenDir, session.ID, 1)
+	if err != nil || attached.Link.Token != tokens.LinkToken || attached.Link.URL != "wss://plane.example.edu/api/v1/sessions/"+session.ID+"/link" {
+		t.Fatalf("link = %#v, run tokens %v", attached.Link, err)
 	}
-	if len(manager.creates) != 0 || capability.ConnectToken != "" {
+	if len(manager.creates) != 0 || tokens.ConnectToken != "" {
 		t.Fatalf("attach made a Dev Tunnel: %d creates", len(manager.creates))
 	}
 	if _, err := service.Attach(context.Background(), testPrincipal, session.ID, nil); !errors.Is(err, errSessionRunning) {

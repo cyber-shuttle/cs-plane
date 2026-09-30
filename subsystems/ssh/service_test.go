@@ -103,7 +103,7 @@ func TestSSHResourcesArePrincipalScopedAndNeverReturnPrivateKeys(t *testing.T) {
 	createdHost := testutil.Serve(handler, requestAs(testPrincipal, http.MethodPost, "/api/v1/hosts", []byte(`{"alias":"delta","command":"ssh me@login.example.edu","keyId":"delta-key"}`)))
 	config, err := os.ReadFile(service.Configs.ConfigPath(testPrincipal))
 	testutil.Check(t, err)
-	keyPath := service.Store.sshPath(security.PrincipalDirName(testPrincipal), "delta-key")
+	keyPath := service.Store.keyPath(security.PrincipalDirName(testPrincipal), "delta-key")
 	if createdHost.Code != http.StatusCreated || !strings.Contains(createdHost.Body.String(), `"managed":true`) || strings.Contains(createdHost.Body.String(), keyPath) || !strings.Contains(string(config), "identityfile "+keyPath) {
 		t.Fatalf("host create = %d %s config=%s", createdHost.Code, createdHost.Body.String(), config)
 	}
@@ -122,7 +122,7 @@ func TestSSHResourcesArePrincipalScopedAndNeverReturnPrivateKeys(t *testing.T) {
 	if strings.Contains(listed.Body.String(), "delta-key") {
 		t.Fatalf("key deletion left a host reference: %s", listed.Body.String())
 	}
-	if _, err := os.Stat(service.Store.sshPath(security.PrincipalDirName(testPrincipal), "delta-key")); !os.IsNotExist(err) {
+	if _, err := os.Stat(service.Store.keyPath(security.PrincipalDirName(testPrincipal), "delta-key")); !os.IsNotExist(err) {
 		t.Fatalf("key file survived deletion: %v", err)
 	}
 	if response := testutil.Serve(handler, requestAs(testPrincipal, http.MethodDelete, "/api/v1/hosts/delta", nil)); response.Code != http.StatusNoContent || response.Body.Len() != 0 {

@@ -30,7 +30,6 @@ import (
 )
 
 const (
-	ControlWebSocketProtocol    = "cybershuttle.v1"
 	maxOutput                   = 1 << 20
 	maxConfigBytes              = 64 << 20
 	maxControlSocketPath        = 100
@@ -352,7 +351,7 @@ func (r Runner) resolvedControlPath(ctx context.Context, alias string) (string, 
 	return r.controlPath(alias, identity)
 }
 
-func (r Runner) RunOutput(ctx context.Context, alias string, timeout time.Duration, stdin io.Reader, remoteArgs ...string) (string, string, error) {
+func (r Runner) RunOutput(ctx context.Context, alias string, stdin io.Reader, remoteArgs ...string) (string, string, error) {
 	if len(remoteArgs) == 0 {
 		return "", "", errors.New("remote command is required")
 	}
@@ -364,8 +363,6 @@ func (r Runner) RunOutput(ctx context.Context, alias string, timeout time.Durati
 	for i, argument := range remoteArgs {
 		quoted[i] = ShellQuote(argument)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	args, err := r.sshArgs(alias, false, identity)
 	if err != nil {
 		return "", "", err
@@ -379,7 +376,9 @@ func (r Runner) RunOutput(ctx context.Context, alias string, timeout time.Durati
 }
 
 func (r Runner) Run(ctx context.Context, alias string, stdin io.Reader, remoteArgs ...string) (string, error) {
-	stdout, stderr, err := r.RunOutput(ctx, alias, r.EffectiveTimeout(), stdin, remoteArgs...)
+	ctx, cancel := context.WithTimeout(ctx, r.EffectiveTimeout())
+	defer cancel()
+	stdout, stderr, err := r.RunOutput(ctx, alias, stdin, remoteArgs...)
 	if err == nil {
 		return stdout, nil
 	}

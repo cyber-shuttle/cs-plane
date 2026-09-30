@@ -49,7 +49,7 @@ func NewService(database *db.DB, configs internalssh.Configurations, control *in
 	return service, nil
 }
 
-func hostWithCredential(alias, command, key string) (HostEntry, error) {
+func hostWithKey(alias, command, key string) (HostEntry, error) {
 	host, err := parseCommand(alias, command)
 	if err != nil {
 		return host, err
@@ -59,19 +59,19 @@ func hostWithCredential(alias, command, key string) (HostEntry, error) {
 }
 
 func (s Service) addHost(principal security.Principal, request AddHostRequest) (HostEntry, error) {
-	host, err := hostWithCredential(strings.TrimSpace(request.Alias), request.Command, request.Key)
+	host, err := hostWithKey(strings.TrimSpace(request.Alias), request.Command, request.Key)
 	if err != nil {
 		return HostEntry{}, err
 	}
-	return s.Store.addHost(security.PrincipalDirName(principal), s.Configs.ConfigPath(principal), host)
+	return host, s.Store.addHost(security.PrincipalDirName(principal), s.Configs.ConfigPath(principal), host)
 }
 
 func (s Service) updateHost(principal security.Principal, alias string, request UpdateHostRequest) (HostEntry, error) {
-	host, err := hostWithCredential(alias, request.Command, request.Key)
+	host, err := hostWithKey(alias, request.Command, request.Key)
 	if err != nil {
 		return HostEntry{}, err
 	}
-	return s.Store.updateHost(security.PrincipalDirName(principal), s.Configs.ConfigPath(principal), host)
+	return host, s.Store.updateHost(security.PrincipalDirName(principal), s.Configs.ConfigPath(principal), host)
 }
 
 func (s Service) deleteHost(principal security.Principal, alias string) error {
@@ -103,6 +103,19 @@ func (s Service) hostHealth(ctx context.Context, principal security.Principal, a
 	}
 	_ = conn.Close()
 	return HostHealth{Alias: alias, OK: true, Message: "Listening at " + address + "."}, nil
+}
+
+// SubprotocolAuthRoute reports the SSH authentication WebSocket, whose browser client offers its bearer as a subprotocol.
+func SubprotocolAuthRoute(request *http.Request) bool {
+	if request.Method != http.MethodGet || request.URL.EscapedPath() != request.URL.Path {
+		return false
+	}
+	const prefix = "/api/v1/hosts/"
+	if !strings.HasPrefix(request.URL.Path, prefix) {
+		return false
+	}
+	segments := strings.Split(strings.TrimPrefix(request.URL.Path, prefix), "/")
+	return len(segments) == 2 && segments[1] == "ssh" && internalssh.ValidAlias(segments[0])
 }
 
 func (s Service) sshRoutes() router.Routes {

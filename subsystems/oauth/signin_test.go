@@ -46,7 +46,7 @@ func newTestSignIn(t *testing.T, tokenRoute http.HandlerFunc) (http.Handler, *ht
 	testutil.Check(t, err)
 	routes, err := router.New(service.Routes())
 	testutil.Check(t, err)
-	return service.Protect(routes), server
+	return service.Protect(routes, func(*http.Request) bool { return false }), server
 }
 
 func TestSignInConfigAnswersCanonicalRoute(t *testing.T) {

@@ -79,15 +79,9 @@ func defaultStateDir() string {
 }
 
 type services struct {
-	DatabaseURL      string
-	PublicURL        string
-	Configs          ssh.Configurations
-	SessionStore     session.Store
-	LinkspanPath     string
-	DevtunnelManager session.DevtunnelManager
-	CapabilityDir    string
-	UpstreamTimeout  time.Duration
-	Origins          security.Origins
+	DatabaseURL string
+	Configs     ssh.Configurations
+	Session     session.Config
 }
 
 type serveComponents struct {
@@ -103,7 +97,7 @@ func (components *serveComponents) close() {
 }
 
 func newServeComponents(svcs services, authentication *oauth.Service) (*serveComponents, error) {
-	database, err := db.Open(svcs.DatabaseURL, svcs.SessionStore.Dir, session.Schema+sshapi.Schema)
+	database, err := db.Open(svcs.DatabaseURL, svcs.Session.Store.Dir, session.Schema+sshapi.Schema)
 	if err != nil {
 		return nil, err
 	}
@@ -112,23 +106,20 @@ func newServeComponents(svcs services, authentication *oauth.Service) (*serveCom
 		components.close()
 		return nil, err
 	}
-	svcs.SessionStore.Database = database
+	svcs.Session.Store.Database = database
 	controlManager := ssh.NewControlManager()
 	components.closers = append(components.closers, controlManager.Close)
 	sshService, err := sshapi.NewService(database, svcs.Configs, controlManager)
 	if err != nil {
 		return fail(err)
 	}
-	devtunnelsService, err := devtunnels.NewService(svcs.SessionStore.Dir, svcs.Configs.Dir, nil)
+	devtunnelsService, err := devtunnels.NewService(svcs.Session.Store.Dir, svcs.Configs.Dir, nil)
 	if err != nil {
 		return fail(err)
 	}
 	components.closers = append(components.closers, devtunnelsService.Close)
-	sessionService := session.NewService(session.Config{
-		Runners: svcs.Configs, Store: svcs.SessionStore, LinkspanPath: svcs.LinkspanPath, DevtunnelManager: svcs.DevtunnelManager,
-		DevtunnelCredentials: devtunnelsService, CapabilityDir: svcs.CapabilityDir, PublicURL: svcs.PublicURL,
-		UpstreamTimeout: svcs.UpstreamTimeout, Origins: svcs.Origins,
-	})
+	svcs.Session.Runners, svcs.Session.DevtunnelCredentials = svcs.Configs, devtunnelsService
+	sessionService := session.NewService(svcs.Session)
 	components.closers = append(components.closers, sessionService.Close)
 	registryRoutes, err := router.New(
 		authentication.Routes(),
@@ -140,7 +131,7 @@ func newServeComponents(svcs services, authentication *oauth.Service) (*serveCom
 		return fail(err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", authentication.Protect(registryRoutes))
+	mux.Handle("/", authentication.Protect(registryRoutes, sshapi.SubprotocolAuthRoute))
 	sessionService.Mount(mux)
 	components.handler = mux
 	return components, nil
@@ -187,7 +178,7 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 	if parsed, err := url.Parse(*publicURL); err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("--public-url must be an https URL without credentials, query or fragment")
 	}
-	svcs.PublicURL = strings.TrimSuffix(*publicURL, "/")
+	svcs.Session.PublicURL = strings.TrimSuffix(*publicURL, "/")
 	oidcClientSecret := os.Getenv("CS_OIDC_CLIENT_SECRET")
 	if strings.TrimSpace(oidcClientSecret) == "" {
 		return errors.New("CS_OIDC_CLIENT_SECRET is required")
@@ -200,12 +191,12 @@ func runServe(ctx context.Context, svcs services, args []string, listen func(str
 	if err != nil {
 		return err
 	}
-	svcs.Origins = origins
+	svcs.Session.Origins = origins
 	authentication, err := oauth.NewService(*oidcIssuer, *oidcClientID, oidcClientSecret, origins, nil)
 	if err != nil {
 		return err
 	}
-	if err := security.EnsurePrivateDir(svcs.SessionStore.Dir); err != nil {
+	if err := security.EnsurePrivateDir(svcs.Session.Store.Dir); err != nil {
 		return err
 	}
 	components, err := newServeComponents(svcs, authentication)
@@ -275,10 +266,10 @@ func run(ctx context.Context, args []string) error {
 			Dir:      principalDir,
 			Template: ssh.Runner{Timeout: sshTimeout, ControlNamespace: stateDir},
 		}
-		return runServe(ctx, services{
-			Configs: configs, SessionStore: session.Store{Dir: stateDir}, LinkspanPath: *linkspan,
-			DevtunnelManager: devtunnelManager, CapabilityDir: credentialDir, UpstreamTimeout: sshTimeout,
-		}, args[1:], net.Listen)
+		return runServe(ctx, services{Configs: configs, Session: session.Config{
+			Store: session.Store{Dir: stateDir}, LinkspanPath: *linkspan, DevtunnelManager: devtunnelManager,
+			TokenDir: credentialDir, UpstreamTimeout: sshTimeout,
+		}}, args[1:], net.Listen)
 	case "help", "-h", "--help":
 		printUsage()
 		return nil

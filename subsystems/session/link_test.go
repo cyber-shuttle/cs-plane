@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyber-shuttle/cs-plane/internal/security"
 	"github.com/cyber-shuttle/cs-plane/internal/slurm"
-	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 	"github.com/cyber-shuttle/cs-plane/internal/testutil"
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -41,9 +41,9 @@ func wsURL(server *httptest.Server, path string) string {
 
 func fakeLinkspan(t *testing.T, plane *httptest.Server, service Service, session Session, backends map[int]string) {
 	t.Helper()
-	capability, err := getCapability(service.CapabilityDir, session.ID, session.Seq)
+	tokens, err := getRunTokens(service.TokenDir, session.ID, session.Seq)
 	testutil.Check(t, err)
-	dialer := websocket.Dialer{Subprotocols: []string{ssh.ControlWebSocketProtocol, linkCapabilityPrefix + capability.LinkToken}}
+	dialer := websocket.Dialer{Subprotocols: []string{security.WebSocketProtocol, linkTokenPrefix + tokens.LinkToken}}
 	ws, response, err := dialer.Dial(wsURL(plane, "/api/v1/sessions/"+session.ID+"/link"), nil)
 	testutil.Check(t, err)
 	_ = response.Body.Close()
@@ -163,7 +163,7 @@ func TestTheLinkCarriesJupyterSSHAndUsageOnDemand(t *testing.T) {
 	if err != nil || started.Port != 2222 {
 		t.Fatalf("ssh start = %#v %v", started, err)
 	}
-	dialer := websocket.Dialer{Subprotocols: []string{ssh.ControlWebSocketProtocol, capabilityPrefix + testJupyterToken}}
+	dialer := websocket.Dialer{Subprotocols: []string{forwardTokenPrefix + testJupyterToken, security.WebSocketProtocol}}
 	forward, response, err := dialer.Dial(wsURL(plane, "/api/v1/sessions/"+session.ID+"/forward/2222"), nil)
 	testutil.Check(t, err)
 	_ = response.Body.Close()

@@ -20,10 +20,10 @@ func TestSSHHostsArePrincipalIsolatedAndRenderPrivateConfigs(t *testing.T) {
 	service := isolatedService(t)
 	mine, theirs := security.PrincipalDirName(testPrincipal), security.PrincipalDirName(otherTestPrincipal)
 	configPath := service.Configs.ConfigPath(testPrincipal)
-	if _, err := service.Store.addHost(mine, configPath, newHostRecord("delta")); err != nil {
+	if err := service.Store.addHost(mine, configPath, newHostRecord("delta")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Store.addHost(mine, configPath, newHostRecord("DELTA")); err == nil || !strings.Contains(err.Error(), "already configured") {
+	if err := service.Store.addHost(mine, configPath, newHostRecord("DELTA")); err == nil || !strings.Contains(err.Error(), "already configured") {
 		t.Fatalf("case-insensitive duplicate was accepted: %v", err)
 	}
 	if hosts, err := service.Store.loadHosts(theirs); err != nil || len(hosts) != 0 {
@@ -88,7 +88,7 @@ func TestKeyDeletionRollsBackMetadataReferencesAndFileWhenConfigWriteFails(t *te
 	if err != nil || len(keys) != 1 || keys[0].Name != "delta-key" {
 		t.Fatalf("key metadata was not rolled back: keys=%v err=%v", keys, err)
 	}
-	if _, err := os.Stat(service.Store.sshPath(mine, "delta-key")); err != nil {
+	if _, err := os.Stat(service.Store.keyPath(mine, "delta-key")); err != nil {
 		t.Fatalf("staged key file was not restored: %v", err)
 	}
 	hosts, err := service.Store.loadHosts(mine)

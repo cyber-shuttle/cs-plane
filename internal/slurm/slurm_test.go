@@ -18,7 +18,7 @@ import (
 func TestDiscoveryParsesOneFramedSnapshot(t *testing.T) {
 	output := strings.Join([]string{
 		"SSH banner", markerUser, "alice", markerAccounts, "Account|", "project-b|", "project-a|", markerPartitions,
-		"cpu*|64|256000|gpu:a100:4(IDX:0-3),license:1", markerHome, "/home/alice", markerDone, "",
+		"cpu*|64|256000|gpu:a100:4(IDX:0-3),license:1,tmpdisk:100G", markerHome, "/home/alice", markerDone, "",
 	}, "\n")
 	got, err := parseDiscovery(output)
 	testutil.Check(t, err)
@@ -119,6 +119,9 @@ func TestStatusParsesCancellationQueueAndAccounting(t *testing.T) {
 	}
 	if !statuses[2].Found || statuses[2].Observation.State != Expired {
 		t.Fatalf("accounting observation = %+v", statuses[2])
+	}
+	if normalizeState("STOPPED") != Pending {
+		t.Fatalf("a STOPPED job still holds its nodes, so it is not over")
 	}
 }
 

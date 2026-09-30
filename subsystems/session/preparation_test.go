@@ -1,7 +1,7 @@
 // Session preparation tests defend request, path, resource, script, and side-effect boundaries.
 // Remote identity and root folder expressions cannot escape their validated forms.
 // The generated job script carries identity but never embeds credentials.
-// Failed validation leaves the database, Dev Tunnels, capabilities, and Slurm submission untouched.
+// Failed validation leaves the database, Dev Tunnels, run tokens, and Slurm submission untouched.
 package session
 
 import (
@@ -249,8 +249,8 @@ func TestStartValidationFailureLeavesTheSessionUnlaunched(t *testing.T) {
 	if len(manager.creates) != 0 {
 		t.Fatalf("failed validation created a Dev Tunnel: %#v", manager.creates)
 	}
-	if entries, err := os.ReadDir(service.CapabilityDir); err == nil && len(entries) != 0 {
-		t.Fatalf("failed validation wrote capabilities: %#v", entries)
+	if entries, err := os.ReadDir(service.TokenDir); err == nil && len(entries) != 0 {
+		t.Fatalf("failed validation wrote run tokens: %#v", entries)
 	} else if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestProvisionReportsExpiredSSHAuthenticationAsRequired(t *testing.T) {
 	sshBin := filepath.Join(t.TempDir(), "ssh")
 	testutil.Check(t, os.WriteFile(sshBin, []byte("#!/bin/sh\n[ \"$1\" = -G ] && echo 'hostname delta' && exit 0\necho 'Permission denied (publickey,password).' >&2\nexit 255\n"), 0o700))
 	service := newTestService(t, ssh.Runner{SSHBin: sshBin, Timeout: 5 * time.Second}, Store{})
-	if code := security.For(service.provisionSession("delta", Session{SessionResponse: SessionResponse{ID: "s-000000000001"}}, "/home/u", "/home/u/.cybershuttle/bin/linkspan")).Code; code != "ssh_authentication_required" {
+	if code := security.For(service.provisionSession(context.Background(), Session{SessionResponse: SessionResponse{ID: "s-000000000001", Alias: "delta"}}, "/home/u", "/home/u/.cybershuttle/bin/linkspan")).Code; code != "ssh_authentication_required" {
 		t.Fatalf("expired SSH authentication provisioned as %q, want ssh_authentication_required", code)
 	}
 }

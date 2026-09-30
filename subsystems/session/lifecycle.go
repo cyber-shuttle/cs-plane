@@ -79,11 +79,11 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareSession(ctx, request)
+	plan, err := s.planSession(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateForCreate(ctx, request, prepared.script); err != nil {
+	if err := s.validateForCreate(ctx, request, plan.script); err != nil {
 		return nil, err
 	}
 
@@ -93,20 +93,20 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 	}
 	defer done()
 
-	intent := prepared.session
-	intent.State, intent.Platform = "SUBMITTING", platformJupyterLab
-	intent, hostToken, capability, err := s.claimRun(operationCtx, principal, credential, intent)
+	intent := plan.session
+	intent.State, intent.Platform = stateSubmitting, platformJupyterLab
+	intent, hostToken, tokens, err := s.claimRun(operationCtx, principal, credential, intent)
 	if err != nil {
 		return nil, err
 	}
-	prepared.script = buildScript(intent, prepared.linkspan)
-	if err := s.provisionSession(request.Alias, intent, prepared.home, prepared.linkspan); err != nil {
+	plan.script = buildScript(intent, plan.linkspan)
+	if err := s.provisionSession(operationCtx, intent, plan.home, plan.linkspan); err != nil {
 		s.sessionStatus(intent.ID, "Session environment preparation failed")
 		return nil, errors.Join(err, s.abandonSubmitIntent(credential, intent))
 	}
 
 	s.sessionStatus(intent.ID, "Submitting Slurm job")
-	jobID, err := s.submitSessionScript(operationCtx, request.Alias, intent, prepared.script, capability, hostToken)
+	jobID, err := s.submitSessionScript(operationCtx, intent, plan.script, tokens, hostToken)
 	if err != nil {
 		if slurm.AmbiguousSubmission(err) {
 			s.sessionStatus(intent.ID, "Session submission outcome is unresolved")
@@ -124,8 +124,8 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 		}
 		return nil, fmt.Errorf("%w; job was cancelled", err)
 	}
-	if created.State == "QUEUED" {
-		s.sessionStatus(intent.ID, "Session is queued")
+	if created.State == stateQueued {
+		s.sessionStatus(intent.ID, stateNarration[stateQueued])
 	}
 	if !superseded {
 		return created, nil
@@ -142,13 +142,11 @@ func (s Service) launchSerialized(ctx context.Context, request CreateRequest, pr
 
 func (s Service) claimLaunch(id string, principal security.Principal) (previous *Session, err error) {
 	err = s.Store.locked(func(current *state) error {
-		existing := current.Sessions[id]
-		switch {
-		case existing == nil:
-			return errSessionNotFound
-		case existing.Owner != principal:
-			return errOwnerMismatch
-		case !terminalSession(existing.State):
+		existing, err := ownedSession(current.Sessions[id], principal)
+		if err != nil {
+			return err
+		}
+		if !terminalSession(existing.State) {
 			return errSessionRunning
 		}
 		previous = detached(existing)
@@ -157,19 +155,19 @@ func (s Service) claimLaunch(id string, principal security.Principal) (previous 
 	return previous, err
 }
 
-func (s Service) claimRun(ctx context.Context, principal security.Principal, credential devtunnel.Credential, intent Session) (Session, string, sessionCapability, error) {
+func (s Service) claimRun(ctx context.Context, principal security.Principal, credential devtunnel.Credential, intent Session) (Session, string, runTokens, error) {
 	previous, err := s.claimLaunch(intent.ID, principal)
 	if err != nil {
-		return intent, "", sessionCapability{}, err
+		return intent, "", runTokens{}, err
 	}
 	intent.CreatedAt, intent.UpdatedAt = previous.CreatedAt, s.utcNow()
-	hostToken, capability, err := s.issueSession(ctx, &intent, principal, credential, previous.Seq+1)
+	hostToken, tokens, err := s.issueSession(ctx, &intent, principal, credential, previous.Seq+1)
 	if err == nil {
 		if err = s.persistSubmitIntent(previous, intent); err != nil {
 			err = errors.Join(err, s.releaseDevtunnel(credential, intent.ID, intent.Seq, intent.Devtunnel))
 		}
 	}
-	return intent, hostToken, capability, err
+	return intent, hostToken, tokens, err
 }
 
 func (s Service) persistSubmitIntent(previous *Session, intent Session) error {
@@ -212,10 +210,10 @@ func (s Service) recordSubmittedJob(sessionID, jobID string) (*Session, bool, er
 			return errors.New("submitted session disappeared from state")
 		}
 		session.JobID = jobID
-		if session.State == "SUBMITTING" {
-			session.State = "QUEUED"
+		if session.State == stateSubmitting {
+			session.State = stateQueued
 		}
-		superseded = session.State != "QUEUED"
+		superseded = session.State != stateQueued
 		session.UpdatedAt = s.utcNow()
 		if err := s.Store.save(current); err != nil {
 			return fmt.Errorf("persist submitted job %s: %w", jobID, err)
@@ -244,7 +242,7 @@ func (s Service) cancelSupersededJob(alias, sessionID, jobID string) (*Session, 
 		if session == nil {
 			return nil
 		}
-		if session.JobID == jobID && session.State != "QUEUED" {
+		if session.JobID == jobID && session.State != stateQueued {
 			session.Error, session.UpdatedAt = diagnostic, s.utcNow()
 			if err := s.Store.save(current); err != nil {
 				return err
@@ -306,10 +304,10 @@ func (s Service) Attach(ctx context.Context, principal security.Principal, id st
 	}
 	defer done()
 	var hostToken string
-	var capability sessionCapability
-	intent.State, intent.Platform, intent.Error, intent.JobID, intent.Node, intent.StartedAt = "QUEUED", platformVSCode, "", "", "", time.Time{}
+	var tokens runTokens
+	intent.State, intent.Platform, intent.Error, intent.JobID, intent.Node, intent.StartedAt = stateQueued, platformVSCode, "", "", "", time.Time{}
 	if err := s.serialized(id, func() (err error) {
-		intent, hostToken, capability, err = s.claimRun(operationCtx, principal, credential, intent)
+		intent, hostToken, tokens, err = s.claimRun(operationCtx, principal, credential, intent)
 		return err
 	}); err != nil {
 		return nil, err
@@ -317,7 +315,7 @@ func (s Service) Attach(ctx context.Context, principal security.Principal, id st
 	s.sessionStatus(id, "Waiting for the client's Linkspan to connect")
 	response := &AttachResponse{Session: intent.SessionResponse, Port: ports(id, intent.Seq).Control}
 	if slices.Contains(intent.TunnelModes, transportLink) {
-		response.Link = &LinkAccess{URL: s.linkURL(id), Token: capability.LinkToken}
+		response.Link = &LinkAccess{URL: s.linkURL(id), Token: tokens.LinkToken}
 	}
 	if slices.Contains(intent.TunnelModes, transportDevtunnel) {
 		response.Devtunnel = &DevtunnelAccess{ID: intent.Devtunnel.ID, Cluster: intent.Devtunnel.ClusterID, HostToken: hostToken}
@@ -335,16 +333,13 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 	var snapshot Session
 	var alreadyStopped bool
 	if err := s.Store.locked(func(current *state) error {
-		session := current.Sessions[id]
-		if session == nil {
-			return errSessionNotFound
-		}
-		if session.Owner != principal {
-			return errOwnerMismatch
+		session, err := ownedSession(current.Sessions[id], principal)
+		if err != nil {
+			return err
 		}
 		alreadyStopped = terminalSession(session.State)
 		if !alreadyStopped {
-			session.State, session.Error, session.UpdatedAt = "STOPPING", "", s.utcNow()
+			session.State, session.Error, session.UpdatedAt = stateStopping, "", s.utcNow()
 			if err := s.Store.save(current); err != nil {
 				return err
 			}
@@ -368,7 +363,7 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 	candidate := snapshot
 	var narration []string
 	if reconcilable(snapshot.State) {
-		if snapshot.Platform != platformVSCode {
+		if !clientLaunched(snapshot.Platform) {
 			s.sessionStatus(id, "Requesting scheduler cancellation")
 		}
 		stopCtx, cancel := s.ownTimeout()
@@ -381,12 +376,10 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 	}
 	var result *Session
 	err = s.Store.locked(func(current *state) error {
-		session := current.Sessions[id]
+		session, changed := s.commitReconciled(current, &snapshot, &candidate, narration)
 		if session == nil {
 			return errSessionNotFound
 		}
-		s.narrateReconciled(session, &snapshot, narration)
-		changed := mergeReconciled(session, &snapshot, &candidate, s.utcNow())
 		if session.Seq == snapshot.Seq && session.Devtunnel.ID == snapshot.Devtunnel.ID {
 			if managementErr != nil {
 				session.Error = boundedSessionError(managementErr)
@@ -398,8 +391,8 @@ func (s Service) Stop(principal security.Principal, id string) (*Session, error)
 				changed = true
 			}
 		}
-		if session.State == "STOPPED" && !alreadyStopped {
-			s.sessionStatus(id, "Session stopped")
+		if session.State == stateStopped && !alreadyStopped {
+			s.sessionStatus(id, stateNarration[stateStopped])
 		}
 		frozen, freezeErr := s.freezeIfTerminal(current, session)
 		if frozen {
@@ -430,12 +423,9 @@ func (s Service) forgetUnpersistedBuffers(id string) {
 func (s Service) Delete(principal security.Principal, id string) (*Session, error) {
 	var deleted *Session
 	if err := s.Store.locked(func(current *state) error {
-		session := current.Sessions[id]
-		if session == nil {
-			return errSessionNotFound
-		}
-		if session.Owner != principal {
-			return errOwnerMismatch
+		session, err := ownedSession(current.Sessions[id], principal)
+		if err != nil {
+			return err
 		}
 		if !terminalSession(session.State) {
 			return security.New("session_not_stopped", "stop the session before deleting it", http.StatusConflict)
@@ -447,7 +437,7 @@ func (s Service) Delete(principal security.Principal, id string) (*Session, erro
 		return nil, err
 	}
 	s.forgetSessionBuffers(id)
-	return deleted, deleteCapability(s.CapabilityDir, deleted.ID, deleted.Seq)
+	return deleted, deleteRunTokens(s.TokenDir, deleted.ID, deleted.Seq)
 }
 
 func (s Service) abandonSubmitIntent(credential devtunnel.Credential, intent Session) error {
@@ -457,7 +447,7 @@ func (s Service) abandonSubmitIntent(credential devtunnel.Credential, intent Ses
 		if currentSession == nil || currentSession.Seq != intent.Seq || currentSession.JobName != intent.JobName || currentSession.JobID != "" {
 			return nil
 		}
-		next := map[string]string{"SUBMITTING": "FAILED", "STOPPING": "STOPPED"}[currentSession.State]
+		next := map[string]string{stateSubmitting: stateFailed, stateStopping: stateStopped}[currentSession.State]
 		if next == "" {
 			return nil
 		}
@@ -476,7 +466,7 @@ func (s Service) Define(principal security.Principal, request CreateRequest) (*S
 		return nil, false, err
 	}
 	session := &Session{SessionResponse: SessionResponse{
-		ID: request.ID, State: "STOPPED", Platform: platformJupyterLab, Alias: request.Alias, Account: request.Account,
+		ID: request.ID, State: stateStopped, Platform: platformJupyterLab, Alias: request.Alias, Account: request.Account,
 		Partition: request.Partition, RootFolder: request.RootFolder, Resources: request.Resources, TunnelModes: request.TunnelModes,
 		CreatedAt: s.utcNow(), UpdatedAt: s.utcNow(),
 	}, Owner: principal}

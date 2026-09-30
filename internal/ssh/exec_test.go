@@ -25,7 +25,7 @@ func TestConfigurationsScopeRunnersAndFailClosed(t *testing.T) {
 		t.Fatalf("principal configuration was not isolated: %q", path)
 	}
 	closed := (Configurations{}).Runner(principal)
-	if _, _, err := closed.RunOutput(context.Background(), "delta", time.Second, nil, "true"); closed.ConfigPath != os.DevNull || security.For(err).Code != "ssh_host_not_found" {
+	if _, _, err := closed.RunOutput(context.Background(), "delta", nil, "true"); closed.ConfigPath != os.DevNull || security.For(err).Code != "ssh_host_not_found" {
 		t.Fatalf("unconfigured runner did not fail closed: %q, %v", closed.ConfigPath, err)
 	}
 	testutil.Check(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -51,7 +51,7 @@ dd if=/dev/zero bs=1048576 count=1 2>/dev/null
 printf x >&2
 `)
 	runner := Runner{SSHBin: sshBin, Timeout: 5 * time.Second}
-	_, _, err := runner.RunOutput(context.Background(), "delta", runner.EffectiveTimeout(), nil, "true")
+	_, _, err := runner.RunOutput(context.Background(), "delta", nil, "true")
 	if err == nil || !strings.Contains(err.Error(), "output exceeded limit") {
 		t.Fatalf("oversized combined remote output error = %v", err)
 	}

@@ -308,7 +308,7 @@ func (s Service) collectStartingSessionLogs(ctx context.Context, sessions []Sess
 	}
 	starting := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
-		if session.State == "STARTING" && idPattern.MatchString(session.ID) &&
+		if session.State == stateStarting && idPattern.MatchString(session.ID) &&
 			session.Seq >= 1 && ssh.ValidAlias(session.Alias) {
 			starting = append(starting, session)
 		}
@@ -402,7 +402,7 @@ func (s Service) sampleOnce(parent context.Context) {
 	defer cancel()
 	var group sync.WaitGroup
 	for _, record := range sessions {
-		if record.State != "READY" {
+		if record.State != stateReady {
 			continue
 		}
 		group.Add(1)
@@ -493,8 +493,8 @@ func (s Service) freezeIfTerminal(current *state, session *Session) (bool, error
 	if !terminalSession(session.State) {
 		return false, nil
 	}
-	if err := deleteCapability(s.CapabilityDir, session.ID, session.Seq); err != nil {
-		session.State, session.Error = "STOPPING", "session cleanup pending: "+boundedSessionError(err)
+	if err := deleteRunTokens(s.TokenDir, session.ID, session.Seq); err != nil {
+		session.State, session.Error = stateStopping, "session cleanup pending: "+boundedSessionError(err)
 		return true, err
 	}
 	if !recordRun(current, s.runOf(session)) {
@@ -502,11 +502,6 @@ func (s Service) freezeIfTerminal(current *state, session *Session) (bool, error
 	}
 	s.forgetSessionBuffers(session.ID)
 	return true, nil
-}
-
-func (s Service) readRunStats(ctx context.Context, alias, name string, startedAt time.Time) (RunStats, error) {
-	stats, err := slurm.Account(ctx, s.runner, alias, name, startedAt, s.utcNow())
-	return RunStats(stats), err
 }
 
 func (s Service) attachRunStats(sessionID string, seq int, stats RunStats) error {
@@ -525,16 +520,21 @@ func (s Service) attachRunStats(sessionID string, seq int, stats RunStats) error
 
 func (s Service) pendingRunStats() ([]runRecord, error) {
 	cutoff := s.utcNow().Add(-runStatsWindow)
+	rows, err := s.Store.queries().ListRuns(background)
+	if err != nil {
+		return nil, err
+	}
 	var due []runRecord
-	err := s.Store.locked(func(current *state) error {
-		for _, run := range current.Runs {
-			if run.Stats == nil && run.Platform != platformVSCode && !run.EndedAt.Before(cutoff) {
-				due = append(due, run)
-			}
+	for _, row := range rows {
+		run, err := decodeRun(row.SessionID, row.Seq, row.Payload)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return due, err
+		if run.Stats == nil && !clientLaunched(run.Platform) && !run.EndedAt.Before(cutoff) {
+			due = append(due, run)
+		}
+	}
+	return due, nil
 }
 
 func (s Service) completeRunStats(parent context.Context) {
@@ -544,11 +544,11 @@ func (s Service) completeRunStats(parent context.Context) {
 	}
 	for _, run := range due {
 		ctx, cancel := context.WithTimeout(parent, s.runner.EffectiveTimeout())
-		stats, err := s.forPrincipal(run.Owner).readRunStats(ctx, run.Alias, jobName(run.SessionID, run.Seq), run.StartedAt)
+		stats, err := slurm.Account(ctx, s.forPrincipal(run.Owner).runner, run.Alias, jobName(run.SessionID, run.Seq), run.StartedAt, s.utcNow())
 		cancel()
-		if err != nil || !stats.complete() {
+		if err != nil || !RunStats(stats).complete() {
 			continue
 		}
-		_ = s.attachRunStats(run.SessionID, run.Seq, stats)
+		_ = s.attachRunStats(run.SessionID, run.Seq, RunStats(stats))
 	}
 }

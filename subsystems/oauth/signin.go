@@ -140,12 +140,13 @@ func (s *Service) Routes() router.Routes {
 	}
 }
 
-// Protect wraps the registry so that only this service's own routes are public.
-func (s *Service) Protect(next *router.Registry) http.Handler {
+// Protect wraps the registry so that only this service's own routes are public; a WebSocket upgrade subprotocolAuth
+// admits carries its bearer as a subprotocol.
+func (s *Service) Protect(next *router.Registry, subprotocolAuth func(*http.Request) bool) http.Handler {
 	public := map[string]struct{}{}
 	for path := range s.Routes() {
 		public[path] = struct{}{}
 	}
 	browser := map[string]struct{}{"/api/v1/oauth/config": {}, "/api/v1/oauth/exchange": {}}
-	return &oauthBoundary{next: next, validate: s.validator, origins: s.origins, publicPaths: public, browserPaths: browser}
+	return &oauthBoundary{next: next, subprotocolAuth: subprotocolAuth, validate: s.validator, origins: s.origins, publicPaths: public, browserPaths: browser}
 }

@@ -64,7 +64,7 @@ func replaceHost(queries *Queries, principal string, host HostEntry) error {
 func (s Store) renderConfig(principal string, hosts []HostEntry) []byte {
 	lines := make([]string, 0, len(hosts))
 	for _, host := range slices.SortedFunc(slices.Values(hosts), func(a, b HostEntry) int { return strings.Compare(a.Alias, b.Alias) }) {
-		lines = append(lines, host.stanza(s.sshPath(principal, host.Key))...)
+		lines = append(lines, host.stanza(s.keyPath(principal, host.Key))...)
 	}
 	return []byte(strings.Join(lines, "\n"))
 }
@@ -79,12 +79,7 @@ func (s Store) locked(fn func(*Queries) error) error {
 }
 
 func (s Store) loadHosts(principal string) ([]HostEntry, error) {
-	var hosts []HostEntry
-	return hosts, s.locked(func(queries *Queries) error {
-		var err error
-		hosts, err = hostsIn(queries, principal)
-		return err
-	})
+	return hostsIn(New(s.Database.Reader()), principal)
 }
 
 // reconcileConfigs rerenders every principal's config, including directories with no rows left, from committed SSH hosts.
@@ -171,34 +166,21 @@ func (s Store) mutateHosts(principal, path string, mutate func(*Queries) error, 
 	})
 }
 
-func (s Store) resolveSSHCredential(queries *Queries, principal string, host HostEntry) (HostEntry, error) {
-	if host.Key == "" {
-		return host, nil
-	}
-	if _, found, err := keyMetadata(queries, principal, host.Key); err != nil {
-		return HostEntry{}, err
-	} else if !found {
-		return HostEntry{}, errSSHKeyNotFound
-	}
-	return host, nil
-}
-
-// putHost resolves the SSH host's key reference, then stores the resolved entry with store inside one config mutation.
-func (s Store) putHost(principal, configPath string, host HostEntry, store func(*Queries, HostEntry) error) (HostEntry, error) {
-	var resolved HostEntry
-	err := s.mutateHosts(principal, configPath, func(queries *Queries) error {
-		var err error
-		if resolved, err = s.resolveSSHCredential(queries, principal, host); err != nil {
-			return err
+// putHost requires the host's key to exist, then runs store, in one config mutation.
+func (s Store) putHost(principal, configPath string, host HostEntry, store func(*Queries) error) error {
+	return s.mutateHosts(principal, configPath, func(queries *Queries) error {
+		if host.Key != "" {
+			if err := requireKey(queries, principal, host.Key); err != nil {
+				return err
+			}
 		}
-		return store(queries, resolved)
+		return store(queries)
 	}, nil)
-	return resolved, err
 }
 
-func (s Store) addHost(principal, configPath string, host HostEntry) (HostEntry, error) {
-	return s.putHost(principal, configPath, host, func(queries *Queries, resolved HostEntry) error {
-		payload, err := json.Marshal(resolved)
+func (s Store) addHost(principal, configPath string, host HostEntry) error {
+	return s.putHost(principal, configPath, host, func(queries *Queries) error {
+		payload, err := json.Marshal(host)
 		if err != nil {
 			return err
 		}
@@ -210,9 +192,9 @@ func (s Store) addHost(principal, configPath string, host HostEntry) (HostEntry,
 	})
 }
 
-func (s Store) updateHost(principal, configPath string, host HostEntry) (HostEntry, error) {
-	return s.putHost(principal, configPath, host, func(queries *Queries, resolved HostEntry) error {
-		return replaceHost(queries, principal, resolved)
+func (s Store) updateHost(principal, configPath string, host HostEntry) error {
+	return s.putHost(principal, configPath, host, func(queries *Queries) error {
+		return replaceHost(queries, principal, host)
 	})
 }
 
@@ -228,10 +210,8 @@ func (s Store) deleteHost(principal, path, alias string) error {
 
 func (s Store) deleteSSHKey(principal, configPath, name string) error {
 	return s.mutateHosts(principal, configPath, func(queries *Queries) error {
-		if _, found, err := keyMetadata(queries, principal, name); err != nil {
+		if err := requireKey(queries, principal, name); err != nil {
 			return err
-		} else if !found {
-			return errSSHKeyNotFound
 		}
 		hosts, err := hostsIn(queries, principal)
 		if err != nil {

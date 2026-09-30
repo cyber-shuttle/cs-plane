@@ -31,7 +31,7 @@ func readyAccessScenario(t *testing.T) (Session, Service) {
 	setTestSessionMetadata(&session)
 	session.State = "READY"
 	service := accessTestService(t, &testDevtunnelManager{})
-	testutil.Check(t, putCapability(service.CapabilityDir, session.ID, session.Seq, defaultSessionCapability()))
+	testutil.Check(t, putRunTokens(service.TokenDir, session.ID, session.Seq, defaultRunTokens()))
 	putSessions(t, service, session)
 	return session, service
 }
