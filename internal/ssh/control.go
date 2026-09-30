@@ -19,8 +19,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var controlUpgrader = websocket.Upgrader{Subprotocols: []string{ControlWebSocketProtocol}, CheckOrigin: func(*http.Request) bool { return true }}
-
 const (
 	maxAuthFrame       = 64 << 10
 	maxAuthInput       = 32 << 10
@@ -347,7 +345,7 @@ func (m *ControlManager) ServeWebSocket(writer http.ResponseWriter, request *htt
 		}
 	}()
 
-	conn, err := controlUpgrader.Upgrade(writer, request, nil)
+	conn, err := security.Upgrader.Upgrade(writer, request, nil)
 	if err != nil {
 		return
 	}

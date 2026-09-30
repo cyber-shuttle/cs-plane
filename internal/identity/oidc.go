@@ -336,12 +336,7 @@ type DeviceAuthorization struct {
 // redeeming it needs the client secret only the daemon holds.
 func (v *OIDC) DeviceAuthorize(ctx context.Context, clientSecret, scope string) (DeviceAuthorization, error) {
 	var authorization DeviceAuthorization
-	metadata, err := v.Discovery(ctx)
-	if err != nil {
-		return authorization, ErrTokenUnavailable
-	}
-	form := url.Values{"client_id": {v.clientID}, "client_secret": {clientSecret}, "scope": {scope}}
-	body, status, err := security.PostForm(ctx, v.client, metadata.DeviceEndpoint, form, oauthRequestTimeout, maxOAuthResponse)
+	body, status, err := v.postClient(ctx, clientSecret, func(metadata Metadata) string { return metadata.DeviceEndpoint }, url.Values{"scope": {scope}})
 	if err != nil || status != http.StatusOK || json.Unmarshal(body, &authorization) != nil || authorization.DeviceCode == "" {
 		return authorization, ErrTokenUnavailable
 	}
@@ -353,16 +348,25 @@ func (v *OIDC) RedeemDevice(ctx context.Context, clientSecret, deviceCode string
 	return v.redeem(ctx, clientSecret, url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"}, "device_code": {deviceCode}})
 }
 
-func (v *OIDC) redeem(ctx context.Context, clientSecret string, form url.Values) (Tokens, error) {
+// postClient posts form with this client's credentials to the discovered endpoint that endpoint selects.
+func (v *OIDC) postClient(ctx context.Context, clientSecret string, endpoint func(Metadata) string, form url.Values) ([]byte, int, error) {
 	metadata, err := v.Discovery(ctx)
 	if err != nil {
-		return Tokens{}, ErrTokenUnavailable
+		return nil, 0, ErrTokenUnavailable
 	}
 	form.Set("client_id", v.clientID)
 	form.Set("client_secret", clientSecret)
-	body, status, err := security.PostForm(ctx, v.client, metadata.TokenEndpoint, form, oauthRequestTimeout, maxOAuthResponse)
+	body, status, err := security.PostForm(ctx, v.client, endpoint(metadata), form, oauthRequestTimeout, maxOAuthResponse)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("%w: %w", ErrTokenUnavailable, err)
+		err = fmt.Errorf("%w: %w", ErrTokenUnavailable, err)
+	}
+	return body, status, err
+}
+
+func (v *OIDC) redeem(ctx context.Context, clientSecret string, form url.Values) (Tokens, error) {
+	body, status, err := v.postClient(ctx, clientSecret, func(metadata Metadata) string { return metadata.TokenEndpoint }, form)
+	if err != nil {
+		return Tokens{}, err
 	}
 	var response struct {
 		Error        string `json:"error"`

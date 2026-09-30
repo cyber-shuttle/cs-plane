@@ -36,7 +36,7 @@ func validSSHKeyName(value string) bool {
 	return security.SafeName(value, 64) && !strings.HasSuffix(value, ".pub")
 }
 
-func (s Store) sshPath(principal, name string) string {
+func (s Store) keyPath(principal, name string) string {
 	return filepath.Join(s.PrincipalDir, principal, "keys", name)
 }
 
@@ -48,15 +48,21 @@ func keyMetadata(queries *Queries, principal, name string) (SSHKey, bool, error)
 	return SSHKey(row), err == nil, err
 }
 
+func requireKey(queries *Queries, principal, name string) error {
+	_, found, err := keyMetadata(queries, principal, name)
+	if err == nil && !found {
+		err = errSSHKeyNotFound
+	}
+	return err
+}
+
 func (s Store) listSSHKeys(principal string) ([]SSHKey, error) {
-	keys := []SSHKey{}
-	return keys, s.locked(func(queries *Queries) error {
-		rows, err := queries.ListKeys(background, principal)
-		for _, row := range rows {
-			keys = append(keys, SSHKey(row))
-		}
-		return err
-	})
+	rows, err := New(s.Database.Reader()).ListKeys(background, principal)
+	keys := make([]SSHKey, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, SSHKey(row))
+	}
+	return keys, err
 }
 
 func sshPutStage(path string, row keyRow) string {
@@ -162,7 +168,7 @@ func (s Store) putSSHKey(principal string, key SSHKey, private []byte) error {
 		} else if exists {
 			return errSSHKeyExists
 		}
-		path := s.sshPath(principal, key.Name)
+		path := s.keyPath(principal, key.Name)
 		if _, err := os.Lstat(path); err == nil {
 			return errSSHKeyExists
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -190,7 +196,7 @@ func (s Store) putSSHKey(principal string, key SSHKey, private []byte) error {
 }
 
 func (s Store) stageSSHDelete(principal, name string) (func(bool) error, error) {
-	path := s.sshPath(principal, name)
+	path := s.keyPath(principal, name)
 	if _, err := security.ReadPrivateFile(path, 1<<20); err != nil {
 		return nil, err
 	}

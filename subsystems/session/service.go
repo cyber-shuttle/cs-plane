@@ -58,9 +58,22 @@ type state struct {
 }
 
 const (
+	stateSubmitting = "SUBMITTING"
+	stateQueued     = "QUEUED"
+	stateStarting   = "STARTING"
+	stateReady      = "READY"
+	stateStopping   = "STOPPING"
+	stateStopped    = "STOPPED"
+	stateFailed     = "FAILED"
+)
+
+const (
 	platformJupyterLab = "jupyterlab"
 	platformVSCode     = "vscode"
 )
+
+// clientLaunched reports a run the client submits itself, which cs-plane never schedules, observes or accounts.
+func clientLaunched(platform string) bool { return platform == platformVSCode }
 
 const DefaultLinkspanPath = "$HOME/.cybershuttle/bin/linkspan"
 
@@ -87,7 +100,7 @@ type Config struct {
 	LinkspanPath         string
 	DevtunnelManager     DevtunnelManager
 	DevtunnelCredentials DevtunnelCredentials
-	CapabilityDir        string
+	TokenDir             string
 	PublicURL            string
 	UpstreamTimeout      time.Duration
 	Origins              security.Origins
@@ -194,11 +207,11 @@ func NewService(config Config) *Service {
 }
 
 func terminalSession(state string) bool {
-	return state == "STOPPED" || state == "FAILED"
+	return state == stateStopped || state == stateFailed
 }
 
 func reconcilable(state string) bool {
-	return state == "SUBMITTING" || state == "QUEUED" || state == "STARTING" || state == "READY" || state == "STOPPING"
+	return state == stateSubmitting || state == stateQueued || state == stateStarting || state == stateReady || state == stateStopping
 }
 
 func jobName(id string, seq int) string { return "cs-" + id + "-" + strconv.Itoa(seq) }
@@ -243,6 +256,16 @@ func ifNoneMatch(raw, current string) bool {
 		}
 	}
 	return false
+}
+
+func ownedSession(session *Session, principal security.Principal) (*Session, error) {
+	switch {
+	case session == nil:
+		return nil, errSessionNotFound
+	case session.Owner != principal:
+		return nil, errOwnerMismatch
+	}
+	return session, nil
 }
 
 func (s Service) Get(principal security.Principal, id string) (*Session, error) {

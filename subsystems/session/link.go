@@ -8,7 +8,6 @@ package session
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -26,20 +25,18 @@ import (
 
 	"github.com/cyber-shuttle/cs-plane/internal/router"
 	"github.com/cyber-shuttle/cs-plane/internal/security"
-	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 )
 
 const (
-	linkCapabilityPrefix = "link."
-	capabilityPrefix     = "capability."
+	linkTokenPrefix    = "link."
+	forwardTokenPrefix = "capability."
 )
 
 var (
 	errNoRoute      = errors.New("the session has no link to cs-plane and no Dev Tunnel")
 	errUnauthorized = security.New("unauthorized", "unauthorized", http.StatusUnauthorized)
-	linkUpgrader    = websocket.Upgrader{Subprotocols: []string{ssh.ControlWebSocketProtocol}, CheckOrigin: func(*http.Request) bool { return true }}
 )
 
 type sessionLink struct {
@@ -55,11 +52,8 @@ func (s Service) link(session Session) *yamux.Session {
 }
 
 func offered(request *http.Request, prefix string) string {
-	protocols := websocket.Subprotocols(request)
-	if len(protocols) != 2 || protocols[0] != ssh.ControlWebSocketProtocol || !strings.HasPrefix(protocols[1], prefix) {
-		return ""
-	}
-	return strings.TrimPrefix(protocols[1], prefix)
+	credential, _ := security.SubprotocolCredential(websocket.Subprotocols(request), prefix)
+	return credential
 }
 
 func (s Service) linkedSession(request *http.Request) (*Session, bool) {
@@ -67,8 +61,8 @@ func (s Service) linkedSession(request *http.Request) (*Session, bool) {
 	if err != nil || terminalSession(session.State) {
 		return nil, false
 	}
-	capability, err := getCapability(s.CapabilityDir, session.ID, session.Seq)
-	return session, err == nil && subtle.ConstantTimeCompare([]byte(offered(request, linkCapabilityPrefix)), []byte(capability.LinkToken)) == 1
+	tokens, err := getRunTokens(s.TokenDir, session.ID, session.Seq)
+	return session, err == nil && subtle.ConstantTimeCompare([]byte(offered(request, linkTokenPrefix)), []byte(tokens.LinkToken)) == 1
 }
 
 func (s Service) authorizedSession(request *http.Request, token string) (*Session, bool) {
@@ -76,8 +70,8 @@ func (s Service) authorizedSession(request *http.Request, token string) (*Sessio
 	if err != nil {
 		return nil, false
 	}
-	capability, err := s.reachable(*session)
-	return session, err == nil && (request.Method == http.MethodOptions || subtle.ConstantTimeCompare([]byte(token), []byte(capability.JupyterToken)) == 1)
+	tokens, err := s.reachable(*session)
+	return session, err == nil && (request.Method == http.MethodOptions || subtle.ConstantTimeCompare([]byte(token), []byte(tokens.JupyterToken)) == 1)
 }
 
 func (s Service) Link(writer http.ResponseWriter, request *http.Request) {
@@ -86,7 +80,7 @@ func (s Service) Link(writer http.ResponseWriter, request *http.Request) {
 		security.WriteError(writer, errUnauthorized)
 		return
 	}
-	control, err := linkUpgrader.Upgrade(writer, request, nil)
+	control, err := security.Upgrader.Upgrade(writer, request, nil)
 	if err != nil {
 		return
 	}
@@ -100,12 +94,11 @@ func (s Service) Link(writer http.ResponseWriter, request *http.Request) {
 	s.sessionStatus(session.ID, "Linkspan connected to cs-plane")
 	_ = s.Store.locked(func(current *state) error {
 		linked := current.Sessions[session.ID]
-		if linked == nil || linked.Seq != session.Seq || linked.State != "QUEUED" && linked.State != "STARTING" {
+		if linked == nil || linked.Seq != session.Seq || linked.State != stateQueued && linked.State != stateStarting {
 			return nil
 		}
-		linked.State, linked.Error, linked.UpdatedAt = "READY", "", s.utcNow()
-		linked.StartedAt = cmp.Or(linked.StartedAt, linked.UpdatedAt)
-		s.sessionStatus(session.ID, stateNarration["READY"])
+		linked.Error, linked.UpdatedAt = "", s.utcNow()
+		s.sessionStatus(session.ID, markReady(linked, linked.UpdatedAt))
 		return s.Store.save(current)
 	})
 	<-mux.CloseChan()
@@ -113,7 +106,7 @@ func (s Service) Link(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s Service) Forward(writer http.ResponseWriter, request *http.Request) {
-	session, ok := s.authorizedSession(request, offered(request, capabilityPrefix))
+	session, ok := s.authorizedSession(request, offered(request, forwardTokenPrefix))
 	if !ok {
 		security.WriteError(writer, errUnauthorized)
 		return
@@ -128,7 +121,7 @@ func (s Service) Forward(writer http.ResponseWriter, request *http.Request) {
 		security.WriteError(writer, security.New("upstream_unavailable", "Linkspan's server could not be reached", http.StatusBadGateway))
 		return
 	}
-	client, err := linkUpgrader.Upgrade(writer, request, nil)
+	client, err := security.Upgrader.Upgrade(writer, request, nil)
 	if err != nil {
 		_ = upstream.Close()
 		return

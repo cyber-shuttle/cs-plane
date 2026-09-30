@@ -42,6 +42,8 @@ type Credential struct {
 	Scheme, Token string
 }
 
+func (c Credential) authorization() string { return cmp.Or(c.Scheme, "Bearer") + " " + c.Token }
+
 type Record struct {
 	ID           string
 	ClusterID    string
@@ -63,24 +65,22 @@ type PortSpec struct {
 }
 
 type CreateRequest struct {
-	Scheme          string
-	OAuthToken      string
-	TunnelID        string
+	Credential
+	ID              string
 	DurationSeconds uint32
 	Ports           []PortSpec
 }
 
 type GetRequest struct {
 	ConnectToken string
-	TunnelID     string
+	ID           string
 	ClusterID    string
 }
 
 type DeleteRequest struct {
-	Scheme     string
-	OAuthToken string
-	TunnelID   string
-	ClusterID  string
+	Credential
+	ID        string
+	ClusterID string
 }
 
 type client struct {
@@ -260,36 +260,36 @@ func (m *client) Create(ctx context.Context, req CreateRequest) (Record, error) 
 		ports = append(ports, createTunnelPort{PortNumber: spec.PortNumber, Protocol: "http", Description: spec.Description})
 	}
 	body, err := json.Marshal(createTunnelBody{
-		TunnelID:         req.TunnelID,
+		TunnelID:         req.ID,
 		CustomExpiration: req.DurationSeconds,
 		Ports:            ports,
 	})
 	if err != nil {
 		return Record{}, errors.New("marshal Dev Tunnel create request")
 	}
-	request, err := security.NewRequest(ctx, http.MethodPut, m.tunnelURL(req.TunnelID, "", true, false), cmp.Or(req.Scheme, "Bearer")+" "+req.OAuthToken, bytes.NewReader(body))
+	request, err := security.NewRequest(ctx, http.MethodPut, m.tunnelURL(req.ID, "", true, false), req.authorization(), bytes.NewReader(body))
 	if err != nil {
 		return Record{}, err
 	}
 	request.Header.Set("If-None-Match", "*")
 	request.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	return m.doRecord(request, req.OAuthToken, req.TunnelID, true)
+	return m.doRecord(request, req.Token, req.ID, true)
 }
 
 func (m *client) Get(ctx context.Context, req GetRequest) (Record, error) {
-	request, err := security.NewRequest(ctx, http.MethodGet, m.tunnelURL(req.TunnelID, req.ClusterID, false, true), "tunnel "+req.ConnectToken, nil)
+	request, err := security.NewRequest(ctx, http.MethodGet, m.tunnelURL(req.ID, req.ClusterID, false, true), "tunnel "+req.ConnectToken, nil)
 	if err != nil {
 		return Record{}, err
 	}
-	return m.doRecord(request, req.ConnectToken, req.TunnelID, false)
+	return m.doRecord(request, req.ConnectToken, req.ID, false)
 }
 
 func (m *client) Delete(ctx context.Context, req DeleteRequest) error {
-	request, err := security.NewRequest(ctx, http.MethodDelete, m.tunnelURL(req.TunnelID, req.ClusterID, false, false), cmp.Or(req.Scheme, "Bearer")+" "+req.OAuthToken, nil)
+	request, err := security.NewRequest(ctx, http.MethodDelete, m.tunnelURL(req.ID, req.ClusterID, false, false), req.authorization(), nil)
 	if err != nil {
 		return err
 	}
-	_, status, err := m.do(request, req.OAuthToken, "delete Dev Tunnel")
+	_, status, err := m.do(request, req.Token, "delete Dev Tunnel")
 	if err != nil {
 		return err
 	}

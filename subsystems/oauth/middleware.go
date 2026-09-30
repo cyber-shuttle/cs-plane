@@ -12,7 +12,6 @@ import (
 
 	"github.com/cyber-shuttle/cs-plane/internal/router"
 	"github.com/cyber-shuttle/cs-plane/internal/security"
-	"github.com/cyber-shuttle/cs-plane/internal/ssh"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,11 +21,12 @@ const (
 )
 
 type oauthBoundary struct {
-	next         *router.Registry
-	validate     func(context.Context, string) (security.Principal, error)
-	origins      security.Origins
-	publicPaths  map[string]struct{}
-	browserPaths map[string]struct{}
+	next            *router.Registry
+	subprotocolAuth func(*http.Request) bool
+	validate        func(context.Context, string) (security.Principal, error)
+	origins         security.Origins
+	publicPaths     map[string]struct{}
+	browserPaths    map[string]struct{}
 }
 
 func preflightHeadersAllowed(raw string, allowed ...string) bool {
@@ -39,19 +39,7 @@ func preflightHeadersAllowed(raw string, allowed ...string) bool {
 	return true
 }
 
-func controlWebSocketRoute(request *http.Request) bool {
-	if request.Method != http.MethodGet || request.URL.EscapedPath() != request.URL.Path {
-		return false
-	}
-	const prefix = "/api/v1/hosts/"
-	if !strings.HasPrefix(request.URL.Path, prefix) {
-		return false
-	}
-	segments := strings.Split(strings.TrimPrefix(request.URL.Path, prefix), "/")
-	return len(segments) == 2 && segments[1] == "ssh" && ssh.ValidAlias(segments[0])
-}
-
-func controlWebSocketAuthorization(request *http.Request) (string, *http.Request, int) {
+func subprotocolAuthorization(request *http.Request) (string, *http.Request, int) {
 	values := request.Header.Values("Sec-WebSocket-Protocol")
 	protocols := make([]string, 0, len(values)*2)
 	for _, value := range values {
@@ -63,20 +51,8 @@ func controlWebSocketAuthorization(request *http.Request) (string, *http.Request
 			protocols = append(protocols, candidate)
 		}
 	}
-	versionCount, bearerCount := 0, 0
-	var encoded string
-	for _, protocol := range protocols {
-		switch {
-		case protocol == ssh.ControlWebSocketProtocol:
-			versionCount++
-		case strings.HasPrefix(protocol, webSocketBearerPrefix):
-			bearerCount++
-			encoded = strings.TrimPrefix(protocol, webSocketBearerPrefix)
-		default:
-			return "", request, http.StatusBadRequest
-		}
-	}
-	if versionCount != 1 || bearerCount != 1 || len(protocols) != 2 {
+	encoded, ok := security.SubprotocolCredential(protocols, webSocketBearerPrefix)
+	if !ok {
 		return "", request, http.StatusBadRequest
 	}
 	if encoded == "" || len(encoded) > maxWebSocketCredentialProtocolBytes {
@@ -90,7 +66,7 @@ func controlWebSocketAuthorization(request *http.Request) (string, *http.Request
 	clean := request.Clone(request.Context())
 	clean.Header = request.Header.Clone()
 	clean.Header.Del("Authorization")
-	clean.Header.Set("Sec-WebSocket-Protocol", ssh.ControlWebSocketProtocol)
+	clean.Header.Set("Sec-WebSocket-Protocol", security.WebSocketProtocol)
 	return token, clean, 0
 }
 
@@ -166,9 +142,9 @@ func (b *oauthBoundary) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	authenticated := request
 	var token string
 	var ok bool
-	if websocket.IsWebSocketUpgrade(request) && controlWebSocketRoute(request) {
+	if websocket.IsWebSocketUpgrade(request) && b.subprotocolAuth(request) {
 		var status int
-		token, authenticated, status = controlWebSocketAuthorization(request)
+		token, authenticated, status = subprotocolAuthorization(request)
 		if status != 0 {
 			if status == http.StatusUnauthorized {
 				writeUnauthorized(writer)

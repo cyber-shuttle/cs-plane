@@ -17,7 +17,7 @@ satisfies with `ssh.Configurations`, `devtunnels.Service` and the Dev Tunnels cl
 internal/testutil      shared test helpers
 internal/router        route-table union, duplicate detection, method dispatch, JSON route failures
 internal/security      API errors, strict JSON, Principal context, origin policy, protected files, bounded HTTP
-                       clients, name predicates
+                       clients, name predicates, WebSocket subprotocols
 internal/db            Postgres connection: schema creation, format check, locking, transactions, unlocked reads
 internal/identity      OIDC discovery, validation and grants
 internal/ssh           bounded SSH execution, principal-scoped runners, PTY/WebSocket bridge, control masters

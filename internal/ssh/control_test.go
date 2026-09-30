@@ -94,7 +94,7 @@ func testWebSocketBoundary(next http.Handler, validate func(string) (security.Pr
 		}
 		clean := request.Clone(security.WithPrincipal(request.Context(), principal))
 		clean.Header = request.Header.Clone()
-		clean.Header.Set("Sec-WebSocket-Protocol", ControlWebSocketProtocol)
+		clean.Header.Set("Sec-WebSocket-Protocol", security.WebSocketProtocol)
 		next.ServeHTTP(writer, clean)
 	})
 }
@@ -181,7 +181,7 @@ func TestSSHAuthWebSocketPromptShareSingleFlightAndCleanup(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/hosts/delta/ssh"
 	dialer := *websocket.DefaultDialer
-	dialer.Subprotocols = []string{ControlWebSocketProtocol, "bearer." + base64.RawURLEncoding.EncodeToString([]byte(testIdentityToken))}
+	dialer.Subprotocols = []string{security.WebSocketProtocol, "bearer." + base64.RawURLEncoding.EncodeToString([]byte(testIdentityToken))}
 	header := http.Header{"Origin": {approvedOrigin}}
 	connection, response, err := dialer.Dial(url, header)
 	if err != nil {
@@ -189,7 +189,7 @@ func TestSSHAuthWebSocketPromptShareSingleFlightAndCleanup(t *testing.T) {
 	}
 	defer func() { _ = connection.Close() }()
 	defer func() { _ = response.Body.Close() }()
-	if connection.Subprotocol() != ControlWebSocketProtocol || response.Header.Get("Sec-WebSocket-Protocol") != ControlWebSocketProtocol || strings.Contains(response.Header.Get("Sec-WebSocket-Protocol"), "bearer.") {
+	if connection.Subprotocol() != security.WebSocketProtocol || response.Header.Get("Sec-WebSocket-Protocol") != security.WebSocketProtocol || strings.Contains(response.Header.Get("Sec-WebSocket-Protocol"), "bearer.") {
 		t.Fatalf("authentication subprotocol = %q response=%q", connection.Subprotocol(), response.Header.Get("Sec-WebSocket-Protocol"))
 	}
 

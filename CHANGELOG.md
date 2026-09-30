@@ -5,6 +5,15 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The link and forward WebSockets accept their two subprotocols in either order.
+
+### Fixed
+
+- Slurm discovery skips a GRES entry it cannot count, such as `tmpdisk:100G`, instead of failing the SSH host.
+- A `STOPPED` Slurm job still holds its nodes, so its session stays `QUEUED` instead of retiring.
+
 ## [0.4.1] - 2026-09-29
 
 ### Changed

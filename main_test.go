@@ -30,10 +30,7 @@ import (
 func testServices(t *testing.T, stateDir string) services {
 	t.Helper()
 	configs := ssh.Configurations{Dir: filepath.Join(stateDir, "hosts")}
-	return services{
-		Configs: configs, SessionStore: session.Store{Dir: stateDir},
-		CapabilityDir: filepath.Join(stateDir, "credentials"),
-	}
+	return services{Configs: configs, Session: session.Config{Store: session.Store{Dir: stateDir}, TokenDir: filepath.Join(stateDir, "credentials")}}
 }
 
 func TestServeValidatesOriginsBeforeListening(t *testing.T) {

@@ -29,11 +29,11 @@ const (
 )
 
 var stateNarration = map[string]string{
-	"QUEUED":   "Session is queued",
-	"STARTING": "Session is starting",
-	"READY":    "Session is running",
-	"STOPPED":  "Session stopped",
-	"FAILED":   "Session failed",
+	stateQueued:   "Session is queued",
+	stateStarting: "Session is starting",
+	stateReady:    "Session is running",
+	stateStopped:  "Session stopped",
+	stateFailed:   "Session failed",
 }
 
 type schedulerScope struct {
@@ -42,7 +42,7 @@ type schedulerScope struct {
 }
 
 func outlivedWalltime(session Session, now time.Time) bool {
-	if (session.State != "STARTING" && session.State != "READY") || session.StartedAt.IsZero() || session.Resources.WallMinutes <= 0 {
+	if (session.State != stateStarting && session.State != stateReady) || session.StartedAt.IsZero() || session.Resources.WallMinutes <= 0 {
 		return false
 	}
 	return now.Sub(session.StartedAt) > time.Duration(session.Resources.WallMinutes)*time.Minute+walltimeGrace
@@ -54,7 +54,7 @@ func unknownToScheduler(session Session, now time.Time) bool {
 
 func unreachableScheduler(session *Session, err error, now time.Time) []string {
 	if outlivedWalltime(*session, now) {
-		session.State, session.Error = "STOPPED", ""
+		session.State, session.Error = stateStopped, ""
 		return []string{"Session reached its walltime"}
 	}
 	session.Error = boundedSessionError(err)
@@ -65,31 +65,31 @@ func missingFromScheduler(session *Session, cancelError string, now time.Time) [
 	if session.JobID == "" && now.Sub(session.UpdatedAt) <= provisionTimeout {
 		return nil
 	}
-	if session.State == "STOPPING" && !unknownToScheduler(*session, now) {
+	if session.State == stateStopping && !unknownToScheduler(*session, now) {
 		session.Error = cmp.Or(cancelError, "scheduler returned no state")
 		return []string{"Session status is temporarily unavailable"}
 	}
 	if session.JobID != "" && !unknownToScheduler(*session, now) {
 		return nil
 	}
-	session.State, session.Error = "STOPPED", ""
+	session.State, session.Error = stateStopped, ""
 	return []string{"Session is no longer known to the scheduler"}
 }
 
 func nextState(current string, state slurm.State) string {
 	switch {
-	case current == "STOPPING" && (state == slurm.Pending || state == slurm.Active):
-		return "STOPPING"
+	case current == stateStopping && (state == slurm.Pending || state == slurm.Active):
+		return stateStopping
 	case state == slurm.Pending:
-		return "QUEUED"
-	case state == slurm.Active && current == "READY":
-		return "READY"
+		return stateQueued
+	case state == slurm.Active && current == stateReady:
+		return stateReady
 	case state == slurm.Active:
-		return "STARTING"
+		return stateStarting
 	case state == slurm.Stopped || state == slurm.Expired:
-		return "STOPPED"
+		return stateStopped
 	}
-	return "FAILED"
+	return stateFailed
 }
 
 func groupByScope[T any](items []T, scope func(T) schedulerScope) map[schedulerScope][]T {
@@ -113,6 +113,17 @@ func mergeReconciled(current, snapshot, candidate *Session, now time.Time) bool 
 	current.State, current.Error, current.JobID, current.Node, current.UpdatedAt = candidate.State, candidate.Error, candidate.JobID, candidate.Node, now
 	current.StartedAt = candidate.StartedAt
 	return true
+}
+
+func markReady(session *Session, now time.Time) string {
+	session.State, session.StartedAt = stateReady, cmp.Or(session.StartedAt, now)
+	return stateNarration[stateReady]
+}
+
+func (s Service) commitReconciled(current *state, snapshot, candidate *Session, narration []string) (*Session, bool) {
+	session := current.Sessions[snapshot.ID]
+	s.narrateReconciled(session, snapshot, narration)
+	return session, mergeReconciled(session, snapshot, candidate, s.utcNow())
 }
 
 func (s Service) triggerRefresh() {
@@ -161,13 +172,13 @@ func (s Service) applyObservation(session *Session, observation slurm.Observatio
 	}
 	previous := session.State
 	next := nextState(previous, observation.State)
-	if (next == "QUEUED" || next == "STARTING") && s.link(*session) != nil {
-		next = "READY"
+	if (next == stateQueued || next == stateStarting) && s.link(*session) != nil {
+		next = stateReady
 	}
 	session.State = next
 	if next != previous {
 		line := stateNarration[next]
-		if next == "STOPPED" && observation.State == slurm.Expired {
+		if next == stateStopped && observation.State == slurm.Expired {
 			line = "Session reached its walltime"
 		}
 		if line != "" {
@@ -175,7 +186,7 @@ func (s Service) applyObservation(session *Session, observation slurm.Observatio
 		}
 	}
 	session.Error = ""
-	if previous == "STOPPING" && next == "STOPPING" {
+	if previous == stateStopping && next == stateStopping {
 		session.Error = cancelError
 	}
 	return lines
@@ -188,11 +199,11 @@ func (s Service) reconcileSnapshots(ctx context.Context, snapshots []Session) ([
 	var wg sync.WaitGroup
 	for i := range results {
 		switch {
-		case results[i].Platform == platformVSCode && results[i].State == "STOPPING":
-			results[i].State, results[i].Error = "STOPPED", ""
-		case results[i].Platform == platformVSCode && results[i].State == "QUEUED" && results[i].Devtunnel.ID != "":
+		case clientLaunched(results[i].Platform) && results[i].State == stateStopping:
+			results[i].State, results[i].Error = stateStopped, ""
+		case clientLaunched(results[i].Platform) && results[i].State == stateQueued && results[i].Devtunnel.ID != "":
 			wg.Go(func() { narration[i] = s.probeDevtunnel(ctx, &results[i]) })
-		case results[i].Platform != platformVSCode && reconcilable(results[i].State):
+		case !clientLaunched(results[i].Platform) && reconcilable(results[i].State):
 			indexes = append(indexes, i)
 		}
 	}
@@ -234,9 +245,8 @@ func (s Service) reconcileSnapshots(ctx context.Context, snapshots []Session) ([
 		return snapshots, make([][]string, len(snapshots))
 	}
 	for index := range results {
-		if _, ok := started[results[index].ID]; ok && results[index].State == "STARTING" {
-			results[index].State = "READY"
-			narration[index] = append(narration[index], "Session is running")
+		if _, ok := started[results[index].ID]; ok && results[index].State == stateStarting {
+			narration[index] = append(narration[index], markReady(&results[index], s.utcNow()))
 		}
 	}
 	return results, narration
@@ -254,13 +264,10 @@ func (s Service) reconcileAll(ctx context.Context) error {
 	return s.Store.locked(func(current *state) error {
 		changed := false
 		for i := range snapshots {
-			session := current.Sessions[snapshots[i].ID]
-			s.narrateReconciled(session, &snapshots[i], narration[i])
-			if !mergeReconciled(session, &snapshots[i], &candidates[i], s.utcNow()) {
-				continue
+			if session, merged := s.commitReconciled(current, &snapshots[i], &candidates[i], narration[i]); merged {
+				changed = true
+				_, _ = s.freezeIfTerminal(current, session)
 			}
-			changed = true
-			_, _ = s.freezeIfTerminal(current, session)
 		}
 		if changed {
 			return s.Store.save(current)
@@ -272,7 +279,7 @@ func (s Service) reconcileAll(ctx context.Context) error {
 func (s Service) schedulerObservations(ctx context.Context, alias string, sessions []Session) (map[string]slurm.Observation, map[string]string, error) {
 	jobs := make([]slurm.Job, len(sessions))
 	for index, session := range sessions {
-		jobs[index] = slurm.Job{ID: session.JobID, Name: session.JobName, Cancel: session.State == "STOPPING", CreatedAt: session.CreatedAt}
+		jobs[index] = slurm.Job{ID: session.JobID, Name: session.JobName, Cancel: session.State == stateStopping, CreatedAt: session.CreatedAt}
 	}
 	statuses, err := slurm.Observe(ctx, s.runner, alias, jobs, s.utcNow())
 	if err != nil {
@@ -296,8 +303,7 @@ func (s Service) probeDevtunnel(ctx context.Context, session *Session) []string 
 	if _, status, err := s.linkspan(ctx, *session, http.MethodGet, "/api/v1/health", nil, 1<<10); err != nil || status != http.StatusOK {
 		return nil
 	}
-	session.State, session.StartedAt = "READY", cmp.Or(session.StartedAt, s.utcNow())
-	return []string{stateNarration["READY"]}
+	return []string{markReady(session, s.utcNow())}
 }
 
 func (s Service) narrateReconciled(current, snapshot *Session, lines []string) {

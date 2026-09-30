@@ -1,9 +1,8 @@
 // A session's Dev Tunnel is part of the session state machine: deterministic ports, requested lifetime, remote
-// Dev Tunnel validation, compensation, and the private per-run capability all derive from session identity and
+// Dev Tunnel validation, compensation, and the private per-run tokens all derive from session identity and
 // state. The Dev Tunnels manager supplies vendor operations and DevtunnelCredentials supplies the owner's connected
 // account; no other subsystem owns or persists session lifecycle state. A defined session that never ran has `seq` 0
-// and no capability. The capability, cs-plane's stored per-run credentials, holds the Jupyter and link tokens and,
-// only with the devtunnel transport, the connect token.
+// and no tokens; a run's tokens are the Jupyter and link tokens plus, with the devtunnel transport, the connect token.
 package session
 
 import (
@@ -27,7 +26,7 @@ import (
 )
 
 const (
-	maxSessionCapability  = 64 << 10
+	maxRunTokensBytes     = 64 << 10
 	devtunnelCleanupGrace = 15 * time.Minute
 )
 
@@ -40,7 +39,7 @@ type sessionPorts struct {
 	Jupyter uint16
 }
 
-type sessionCapability struct {
+type runTokens struct {
 	ConnectToken string `json:"connectToken,omitempty"`
 	JupyterToken string `json:"jupyterToken"`
 	LinkToken    string `json:"linkToken"`
@@ -57,15 +56,15 @@ func ports(sessionID string, seq int) sessionPorts {
 	return sessionPorts{Control: uint16(base), Jupyter: uint16(base + 1)}
 }
 
-func capabilityPath(dir, sessionID string, seq int) (string, error) {
+func runTokensPath(dir, sessionID string, seq int) (string, error) {
 	if !filepath.IsAbs(dir) || !idPattern.MatchString(sessionID) || seq < 1 {
-		return "", errors.New("capability store identity is invalid")
+		return "", errors.New("run token identity is invalid")
 	}
 	return filepath.Join(dir, sessionID+"-"+strconv.Itoa(seq)+".token"), nil
 }
 
-func validCapability(capability sessionCapability) bool {
-	return (capability.ConnectToken == "" || security.ValidCredential(capability.ConnectToken)) && validSecret(capability.JupyterToken) && validSecret(capability.LinkToken)
+func validRunTokens(tokens runTokens) bool {
+	return (tokens.ConnectToken == "" || security.ValidCredential(tokens.ConnectToken)) && validSecret(tokens.JupyterToken) && validSecret(tokens.LinkToken)
 }
 
 func validSecret(value string) bool {
@@ -79,17 +78,17 @@ func newSecret() string {
 	return base64.RawURLEncoding.EncodeToString(secret)
 }
 
-func putCapability(dir, sessionID string, seq int, capability sessionCapability) error {
-	location, err := capabilityPath(dir, sessionID, seq)
+func putRunTokens(dir, sessionID string, seq int, tokens runTokens) error {
+	location, err := runTokensPath(dir, sessionID, seq)
 	if err != nil {
 		return err
 	}
-	if !validCapability(capability) {
-		return errors.New("session capability is invalid")
+	if !validRunTokens(tokens) {
+		return errors.New("run tokens are invalid")
 	}
-	encoded, err := json.Marshal(capability)
+	encoded, err := json.Marshal(tokens)
 	if err != nil {
-		return errors.New("encode session capability")
+		return errors.New("encode run tokens")
 	}
 	if err := security.EnsurePrivateDir(dir); err != nil {
 		return err
@@ -97,35 +96,35 @@ func putCapability(dir, sessionID string, seq int, capability sessionCapability)
 	return security.ReplaceFile(location, encoded)
 }
 
-func getCapability(dir, sessionID string, seq int) (sessionCapability, error) {
-	location, err := capabilityPath(dir, sessionID, seq)
+func getRunTokens(dir, sessionID string, seq int) (runTokens, error) {
+	location, err := runTokensPath(dir, sessionID, seq)
 	if err != nil {
-		return sessionCapability{}, err
+		return runTokens{}, err
 	}
 	if err := security.PrivateDir(dir); err != nil {
-		return sessionCapability{}, err
+		return runTokens{}, err
 	}
-	data, err := security.ReadPrivateFile(location, maxSessionCapability)
+	data, err := security.ReadPrivateFile(location, maxRunTokensBytes)
 	if err != nil {
-		return sessionCapability{}, err
+		return runTokens{}, err
 	}
-	var capability sessionCapability
-	if err := security.DecodeStrict(bytes.NewReader(data), &capability); err != nil || !validCapability(capability) {
-		return sessionCapability{}, errors.New("stored session capability is invalid")
+	var tokens runTokens
+	if err := security.DecodeStrict(bytes.NewReader(data), &tokens); err != nil || !validRunTokens(tokens) {
+		return runTokens{}, errors.New("stored run tokens are invalid")
 	}
-	return capability, nil
+	return tokens, nil
 }
 
-func deleteCapability(dir, sessionID string, seq int) error {
+func deleteRunTokens(dir, sessionID string, seq int) error {
 	if seq == 0 {
 		return nil
 	}
-	location, err := capabilityPath(dir, sessionID, seq)
+	location, err := runTokensPath(dir, sessionID, seq)
 	if err != nil {
 		return err
 	}
 	if err := security.RemoveFile(location); err != nil {
-		return errors.New("delete session capability")
+		return errors.New("delete run tokens")
 	}
 	return nil
 }
@@ -137,12 +136,12 @@ func devtunnelDuration(wallMinutes int) uint32 {
 }
 
 func (s Service) sessionEndpoint(ctx context.Context, session Session, number uint16) (devtunnelEndpoint, error) {
-	capability, err := getCapability(s.CapabilityDir, session.ID, session.Seq)
-	if err != nil || capability.ConnectToken == "" {
+	tokens, err := getRunTokens(s.TokenDir, session.ID, session.Seq)
+	if err != nil || tokens.ConnectToken == "" {
 		return devtunnelEndpoint{}, errors.New("this run has no Dev Tunnel")
 	}
 	record, err := s.DevtunnelManager.Get(ctx, devtunnel.GetRequest{
-		ConnectToken: capability.ConnectToken, TunnelID: session.Devtunnel.ID, ClusterID: session.Devtunnel.ClusterID,
+		ConnectToken: tokens.ConnectToken, ID: session.Devtunnel.ID, ClusterID: session.Devtunnel.ClusterID,
 	})
 	if err != nil {
 		return devtunnelEndpoint{}, errors.New("the session's Dev Tunnel could not be reached")
@@ -157,23 +156,23 @@ func (s Service) sessionEndpoint(ctx context.Context, session Session, number ui
 	if err != nil {
 		return devtunnelEndpoint{}, errors.New("Dev Tunnel control port is invalid")
 	}
-	return devtunnelEndpoint{URI: uri, ConnectToken: capability.ConnectToken}, nil
+	return devtunnelEndpoint{URI: uri, ConnectToken: tokens.ConnectToken}, nil
 }
 
-func (s Service) reachable(session Session) (sessionCapability, error) {
-	capability, err := getCapability(s.CapabilityDir, session.ID, session.Seq)
+func (s Service) reachable(session Session) (runTokens, error) {
+	tokens, err := getRunTokens(s.TokenDir, session.ID, session.Seq)
 	var reason string
 	switch {
-	case session.State != "READY":
+	case session.State != stateReady:
 		reason = "the session is " + strings.ToLower(session.State)
 	case s.link(session) == nil && session.Devtunnel.ID == "":
 		reason = errNoRoute.Error()
 	case err != nil:
 		reason = "this run has no stored tokens"
 	default:
-		return capability, nil
+		return tokens, nil
 	}
-	return sessionCapability{}, security.New("session_access_unavailable", "Session access is unavailable: "+reason, http.StatusConflict)
+	return runTokens{}, security.New("session_access_unavailable", "Session access is unavailable: "+reason, http.StatusConflict)
 }
 
 func (s Service) Access(principal security.Principal, id string) (*SessionAccessResponse, error) {
@@ -181,45 +180,45 @@ func (s Service) Access(principal security.Principal, id string) (*SessionAccess
 	if err != nil {
 		return nil, err
 	}
-	capability, err := s.reachable(*session)
+	tokens, err := s.reachable(*session)
 	if err != nil {
 		return nil, err
 	}
 	return &SessionAccessResponse{
 		SessionID: session.ID, Seq: session.Seq, ExpiresAt: cmp.Or(session.StartedAt, s.utcNow()).Add(time.Duration(session.Resources.WallMinutes) * time.Minute),
-		Jupyter: SessionJupyterAccess{URI: s.PublicURL + "/api/v1/sessions/" + session.ID + "/jupyter/", Token: capability.JupyterToken},
+		Jupyter: SessionJupyterAccess{URI: s.PublicURL + "/api/v1/sessions/" + session.ID + "/jupyter/", Token: tokens.JupyterToken},
 	}, nil
 }
 
-func (s Service) issueSession(ctx context.Context, session *Session, principal security.Principal, credential devtunnel.Credential, seq int) (string, sessionCapability, error) {
+func (s Service) issueSession(ctx context.Context, session *Session, principal security.Principal, credential devtunnel.Credential, seq int) (string, runTokens, error) {
 	devtunnelID := session.ID + "-" + strconv.Itoa(seq)
 	if !idPattern.MatchString(session.ID) || seq < 1 || !devtunnel.ValidID(devtunnelID) {
-		return "", sessionCapability{}, errors.New("session Dev Tunnel identity is invalid")
+		return "", runTokens{}, errors.New("session Dev Tunnel identity is invalid")
 	}
-	capability := sessionCapability{JupyterToken: newSecret(), LinkToken: newSecret()}
+	tokens := runTokens{JupyterToken: newSecret(), LinkToken: newSecret()}
 	var metadata devtunnelMetadata
 	hostToken := ""
 	if credential.Token != "" {
 		requestedAt := s.utcNow()
 		record, err := s.DevtunnelManager.Create(ctx, devtunnel.CreateRequest{
-			Scheme: credential.Scheme, OAuthToken: credential.Token, TunnelID: devtunnelID,
+			Credential: credential, ID: devtunnelID,
 			DurationSeconds: devtunnelDuration(session.Resources.WallMinutes),
 			Ports:           []devtunnel.PortSpec{{PortNumber: ports(session.ID, seq).Control, Description: "cybershuttle-control"}},
 		})
 		if err != nil {
-			return "", sessionCapability{}, errors.Join(security.Redact("create session Dev Tunnel", err, credential.Token), s.releaseDevtunnel(credential, session.ID, seq, devtunnelMetadata{ID: devtunnelID}))
+			return "", runTokens{}, errors.Join(security.Redact("create session Dev Tunnel", err, credential.Token), s.releaseDevtunnel(credential, session.ID, seq, devtunnelMetadata{ID: devtunnelID}))
 		}
 		metadata = devtunnelMetadata{ID: record.ID, ClusterID: record.ClusterID, ExpiresAt: record.ExpiresAt.UTC()}
 		if record.ID != devtunnelID || !devtunnel.ValidClusterID(record.ClusterID) || !security.ValidCredential(record.HostToken) || !security.ValidCredential(record.ConnectToken) || !record.ExpiresAt.After(requestedAt) {
-			return "", sessionCapability{}, errors.Join(errors.New("created Dev Tunnel metadata is invalid"), s.releaseDevtunnel(credential, session.ID, seq, metadata))
+			return "", runTokens{}, errors.Join(errors.New("created Dev Tunnel metadata is invalid"), s.releaseDevtunnel(credential, session.ID, seq, metadata))
 		}
-		capability.ConnectToken, hostToken = record.ConnectToken, record.HostToken
+		tokens.ConnectToken, hostToken = record.ConnectToken, record.HostToken
 	}
-	if err := putCapability(s.CapabilityDir, session.ID, seq, capability); err != nil {
-		return "", sessionCapability{}, errors.Join(err, s.releaseDevtunnel(credential, session.ID, seq, metadata))
+	if err := putRunTokens(s.TokenDir, session.ID, seq, tokens); err != nil {
+		return "", runTokens{}, errors.Join(err, s.releaseDevtunnel(credential, session.ID, seq, metadata))
 	}
 	session.Seq, session.JobName, session.Owner, session.Devtunnel = seq, jobName(session.ID, seq), principal, metadata
-	return hostToken, capability, nil
+	return hostToken, tokens, nil
 }
 
 func (s Service) releaseDevtunnel(credential devtunnel.Credential, sessionID string, seq int, metadata devtunnelMetadata) error {
@@ -228,10 +227,10 @@ func (s Service) releaseDevtunnel(credential devtunnel.Credential, sessionID str
 	var deleteErr error
 	if metadata.ID != "" && credential.Token != "" {
 		if err := s.DevtunnelManager.Delete(ctx, devtunnel.DeleteRequest{
-			Scheme: credential.Scheme, OAuthToken: credential.Token, TunnelID: metadata.ID, ClusterID: metadata.ClusterID,
+			Credential: credential, ID: metadata.ID, ClusterID: metadata.ClusterID,
 		}); err != nil {
 			deleteErr = security.Redact("compensate session Dev Tunnel", err, credential.Token)
 		}
 	}
-	return errors.Join(deleteErr, deleteCapability(s.CapabilityDir, sessionID, seq))
+	return errors.Join(deleteErr, deleteRunTokens(s.TokenDir, sessionID, seq))
 }

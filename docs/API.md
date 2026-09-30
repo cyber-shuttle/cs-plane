@@ -466,7 +466,7 @@ has neither a link nor a Dev Tunnel is `409 session_access_unavailable`, with th
 
 A WebSocket carrying one TCP connection, as binary frames, to a port Linkspan serves in the session: the SSH server
 `POST .../ssh` started, Jupyter Server, its control port, or any other. It takes no bearer; the client offers exactly
-`cybershuttle.v1` then `capability.<token>`, with `token` from `/access`.
+`cybershuttle.v1` and `capability.<token>`, in any order, with `token` from `/access`.
 
 | Refusal | Answer |
 | --- | --- |
@@ -484,11 +484,11 @@ Jupyter Server. A foreign `Origin` is `403 origin_not_allowed`, a wrong token or
 
 ### `GET /api/v1/sessions/{id}/link` → 101
 
-The WebSocket a session's Linkspan dials and holds. It offers exactly `cybershuttle.v1` then `link.<token>`, the
-per-run link token from its environment or `attach`; any other offer or a terminal session is `401`. The socket
-carries yamux in binary frames with cs-plane as client. On each stream cs-plane writes the target port as two
-big-endian bytes; Linkspan answers `1` when connected or `0` when no task serves the port. A newer socket replaces
-the older one.
+The WebSocket a session's Linkspan dials and holds. It offers exactly `cybershuttle.v1` and `link.<token>`, in any
+order, with `token` the per-run link token from its environment or `attach`; any other offer or a terminal session is
+`401`. The socket carries yamux in binary frames with cs-plane as client. On each stream cs-plane writes the target
+port as two big-endian bytes; Linkspan answers `1` when connected or `0` when no task serves the port. A newer socket
+replaces the older one.
 
 ### `GET /api/v1/sessions/{id}/usage` → 200
 
