@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	Version                       = "0.4.1"
+	Version                       = "0.4.2"
 	defaultDevTunnelManagementURL = "https://global.rel.tunnels.api.visualstudio.com"
 	defaultOIDCIssuer             = "https://cilogon.org"
 	sshTimeout                    = 20 * time.Second
