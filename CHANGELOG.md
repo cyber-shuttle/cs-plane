@@ -5,6 +5,8 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-30
+
 ### Changed
 
 - The link and forward WebSockets accept their two subprotocols in either order.
@@ -116,7 +118,8 @@ Each user re-adds their SSH hosts, SSH keys and Dev Tunnels account.
 - `GET /telemetry`: finished runs per seq with Slurm accounting.
 - State in a Postgres schema named by `CS_DATABASE_URL`, with sqlc-generated queries.
 
-[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.4.0
 [0.3.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.3.0
