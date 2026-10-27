@@ -53,7 +53,7 @@ fi
 while [ "$1" = "-o" ] || [ "$1" = "-F" ]; do shift 2; done
 alias=$1; shift
 [ "$#" -eq 1 ] || { echo "expected one OpenSSH remote command argument" >&2; exit 2; }
-wire_command=$1
+wire_command=${1#"$REMOTE_PROLOGUE "}
 printf '%s|%s\n' "$alias" "$wire_command" >> "$FAKE_COMMAND_LOG"
 if printf '%s' "$wire_command" | grep -q 'cs-session-log-tail'; then
   cat > /dev/null
@@ -181,6 +181,7 @@ printf '%s;cluster\n' "${FAKE_JOB_ID:-12345}"
 	t.Setenv("FAKE_ACCEPTED_JOB_NAME", acceptedJobName)
 	t.Setenv("FAKE_ACCEPTED_JOB_ID", acceptedJobID)
 	t.Setenv("FAKE_SCHEDULER_QUERY_COUNT", schedulerQueryCount)
+	t.Setenv("REMOTE_PROLOGUE", ssh.RemotePrologue)
 	const discoveryMarker = "__CS_DSC_6f1c9a7e4b2d8053_"
 	t.Setenv("DISC_USER", discoveryMarker+"USER__")
 	t.Setenv("DISC_ACCOUNTS", discoveryMarker+"ACCOUNTS__")
