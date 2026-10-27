@@ -166,9 +166,9 @@ func childEnv() []string {
 	return append(kept, "LC_ALL="+utf8Locale)
 }
 
-// RemotePrologue runs each remote command in a login shell: sites such as PACE put Slurm on PATH only through
-// /etc/profile.d, which a non-interactive ssh command never reads.
-const RemotePrologue = `sh -lc 'exec "$@"' sh`
+// Some sites put Slurm on PATH only through /etc/profile.d; the profile runs off the command's streams so
+// its output or stdin reads cannot corrupt them.
+const RemotePrologue = `sh -c 'if [ -r /etc/profile ]; then . /etc/profile </dev/null >/dev/null 2>&1; fi; exec "$@"' sh`
 
 func ShellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'" }
 
