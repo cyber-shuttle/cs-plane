@@ -66,11 +66,11 @@ printf x >&2
 	}
 }
 
-func TestRunOutputShieldsCommandFromLoginProfile(t *testing.T) {
+func TestRunOutputShieldsCommandFromSystemProfile(t *testing.T) {
 	dir := t.TempDir()
 	profile := "echo banner\necho noise >&2\nread -r swallowed\nexport PROFILE_LOADED=yes\n"
-	testutil.Check(t, os.WriteFile(filepath.Join(dir, ".profile"), []byte(profile), 0o600))
-	t.Setenv("HOME", dir)
+	testutil.Check(t, os.WriteFile(filepath.Join(dir, "profile"), []byte(profile), 0o600))
+	t.Setenv("FAKE_PROFILE", filepath.Join(dir, "profile"))
 	sshBin := filepath.Join(dir, "ssh")
 	testutil.WriteScript(t, sshBin, `#!/bin/sh
 if [ "$1" = "-G" ]; then
@@ -78,7 +78,7 @@ if [ "$1" = "-G" ]; then
   exit 0
 fi
 for last do :; done
-exec sh -c "$last"
+exec sh -c "$(printf '%s' "$last" | sed "s|/etc/profile|$FAKE_PROFILE|g")"
 `)
 	runner := Runner{SSHBin: sshBin, Timeout: 5 * time.Second}
 	stdout, stderr, err := runner.RunOutput(context.Background(), "delta", strings.NewReader("echo \"$PROFILE_LOADED $1\"\n"), "sh", "-s", "--", "it's")
