@@ -86,7 +86,8 @@ Every refusal is this envelope:
 ```
 
 An unclassified failure is `500 internal_error`, its
-detail logged, not returned.
+detail logged, not returned. An SSH host that times out, cannot be resolved or cannot be reached is
+`502 upstream_unavailable`, its message naming the alias.
 
 | Code | Status |
 | --- | --- |

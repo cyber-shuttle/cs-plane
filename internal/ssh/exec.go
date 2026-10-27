@@ -196,15 +196,21 @@ func AmbiguousExit(err error) bool {
 }
 
 func ClassifyFailure(alias, stderr string, err error) error {
-	if err == nil {
-		return nil
+	if _, ok := errors.AsType[*security.APIError](err); ok || err == nil {
+		return err
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("ssh command timed out: %w", err)
+		return security.New("upstream_unavailable", alias+" did not respond in time", http.StatusBadGateway)
 	}
 	message := FailureMessage(stderr, err)
 	if AuthenticationFailure(message) {
 		return security.New("ssh_authentication_required", "SSH authentication is required for "+alias, http.StatusConflict)
+	}
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 255 {
+		if strings.Contains(strings.ToLower(message), "could not resolve hostname") {
+			return security.New("upstream_unavailable", "the host name of "+alias+" could not be resolved", http.StatusBadGateway)
+		}
+		return security.New("upstream_unavailable", alias+" could not be reached over SSH", http.StatusBadGateway)
 	}
 	return fmt.Errorf("ssh command failed: %s", message)
 }
