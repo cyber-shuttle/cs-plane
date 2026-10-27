@@ -278,8 +278,8 @@ func Discover(ctx context.Context, runner ssh.Runner, alias string) (Discovery, 
 	discovered, parseErr := parseDiscovery(stdout)
 	switch {
 	case runErr != nil && parseErr != nil:
-		if classified := security.For(runErr); classified.Code != "internal_error" {
-			return Discovery{}, runErr
+		if classified := ssh.ClassifyFailure(alias, stderr, runErr); security.For(classified).Code != "internal_error" {
+			return Discovery{}, classified
 		}
 		return Discovery{}, fmt.Errorf("%w: %s", parseErr, ssh.FailureMessage(stderr, runErr))
 	case runErr != nil:

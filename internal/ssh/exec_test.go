@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -84,6 +85,26 @@ exec sh -c "$(printf '%s' "$last" | sed "s|/etc/profile|$FAKE_PROFILE|g")"
 	stdout, stderr, err := runner.RunOutput(context.Background(), "delta", strings.NewReader("echo \"$PROFILE_LOADED $1\"\n"), "sh", "-s", "--", "it's")
 	if err != nil || stdout != "yes it's\n" || stderr != "" {
 		t.Fatalf("stdout=%q stderr=%q err=%v", stdout, stderr, err)
+	}
+}
+
+func TestClassifyFailureNamesUnreachableHosts(t *testing.T) {
+	exit := func(code string) error { return exec.Command("sh", "-c", "exit "+code).Run() }
+	for _, test := range []struct {
+		stderr  string
+		err     error
+		code    string
+		message string
+	}{
+		{"", context.DeadlineExceeded, "upstream_unavailable", "delta did not respond in time"},
+		{"ssh: Could not resolve hostname login.example: Name or service not known", exit("255"), "upstream_unavailable", "the host name of delta could not be resolved"},
+		{"Connection closed by UNKNOWN port 65535", exit("255"), "upstream_unavailable", "delta could not be reached over SSH"},
+		{"user@host: Permission denied (password).", exit("255"), "ssh_authentication_required", "SSH authentication is required for delta"},
+		{"sbatch: error: invalid partition", exit("1"), "internal_error", "internal error"},
+	} {
+		if got := security.For(ClassifyFailure("delta", test.stderr, test.err)); got.Code != test.code || got.Message != test.message {
+			t.Errorf("ClassifyFailure(%q) = %s %q", test.stderr, got.Code, got.Message)
+		}
 	}
 }
 
