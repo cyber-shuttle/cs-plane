@@ -39,8 +39,8 @@ The `/api/v1` surface is not yet stable. [CHANGELOG.md](CHANGELOG.md) records wh
   `POST /api/v1/devtunnels/authorizations` and kept sealed under the caller's principal, for a Dev Tunnel made
   with that account per run with the `devtunnel` transport.
 - **An SSH-reachable Linux Slurm cluster** whose SSH host provides `sacctmgr`, `sinfo`, `sbatch`, `squeue`,
-  `sacct`, `scancel`, `curl`, `tar`, `base64`, `od`, `install`, `printenv`, `sed` and `sort -V`, and whose
-  nodes run Linux `x86_64` or `arm64` with `curl`.
+  `sacct`, `scancel`, `curl`, `tar`, `base64`, `od`, `install`, `printenv`, `sed` and `sort -V` on a login
+  shell's `PATH`, and whose nodes run Linux `x86_64` or `arm64` with `curl`.
 - **[Linkspan](https://github.com/cyber-shuttle/linkspan) 0.22.0 or newer**, the release that takes
   `--tunnel-mode link` and `--tunnel-link-args`; cs-plane installs the latest release on an SSH host that has none.
 - **Outbound internet.** From the SSH host to `github.com`; from the compute node to `--public-url`, which
