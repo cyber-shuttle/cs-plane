@@ -434,6 +434,9 @@ func (s Service) sampleSession(ctx context.Context, session Session) (UsageSampl
 		return UsageSample{}, errors.New("the job's Linkspan returned no sample")
 	}
 	sample.At = s.utcNow()
+	sample.GPUs = slices.DeleteFunc(sample.GPUs, func(g GPUSample) bool {
+		return g.UtilPct == nil || g.MemUsedMiB == nil || g.MemTotalMiB == nil
+	})
 	return sample, nil
 }
 
