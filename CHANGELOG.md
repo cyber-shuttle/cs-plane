@@ -5,6 +5,8 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-03
+
 ### Fixed
 
 - Usage samples drop a GPU whose utilization or memory Linkspan could not read, instead of reporting `0`.
@@ -122,7 +124,8 @@ Each user re-adds their SSH hosts, SSH keys and Dev Tunnels account.
 - `GET /telemetry`: finished runs per seq with Slurm accounting.
 - State in a Postgres schema named by `CS_DATABASE_URL`, with sqlc-generated queries.
 
-[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/cyber-shuttle/cs-plane/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/cyber-shuttle/cs-plane/commits/v0.4.0
