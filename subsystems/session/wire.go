@@ -124,10 +124,10 @@ type SessionLogTail struct {
 }
 
 type GPUSample struct {
-	Index       int `json:"index"`
-	UtilPct     int `json:"utilPct"`
-	MemUsedMiB  int `json:"memUsedMiB"`
-	MemTotalMiB int `json:"memTotalMiB"`
+	Index       int  `json:"index"`
+	UtilPct     *int `json:"utilPct"`
+	MemUsedMiB  *int `json:"memUsedMiB"`
+	MemTotalMiB *int `json:"memTotalMiB"`
 }
 
 type UsageSample struct {

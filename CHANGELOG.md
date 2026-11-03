@@ -5,6 +5,10 @@ Notable changes to cs-plane. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Usage samples drop a GPU whose utilization or memory Linkspan could not read, instead of reporting `0`.
+
 ## [0.4.2] - 2026-09-30
 
 ### Changed

@@ -109,8 +109,8 @@ func TestTheLinkCarriesJupyterSSHAndUsageOnDemand(t *testing.T) {
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/usage":
-			used := int64(2048)
-			_ = json.NewEncoder(w).Encode(UsageSample{MemBytes: &used})
+			_, _ = w.Write([]byte(`{"memBytes":2048,"gpus":[{"index":0,"memUsedMiB":1,"memTotalMiB":2},` +
+				`{"index":1,"utilPct":5,"memUsedMiB":1,"memTotalMiB":2}]}`))
 		case "/api/v1/vscode/sessions":
 			var body map[string]string
 			if json.NewDecoder(r.Body).Decode(&body) != nil || body["authorized_key"] != "ssh-ed25519 AAAA" || body["ref"] != "ssh-9de8a23119db6492" {
@@ -190,7 +190,7 @@ func TestTheLinkCarriesJupyterSSHAndUsageOnDemand(t *testing.T) {
 	}
 
 	sample, err := service.sampleSession(context.Background(), session)
-	if err != nil || sample.MemBytes == nil || *sample.MemBytes != 2048 {
+	if err != nil || sample.MemBytes == nil || *sample.MemBytes != 2048 || len(sample.GPUs) != 1 || sample.GPUs[0].Index != 1 {
 		t.Fatalf("sample = %#v %v", sample, err)
 	}
 }
